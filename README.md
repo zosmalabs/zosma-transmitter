@@ -1,67 +1,61 @@
-# Transmissor NDI® Portátil
+# Zosma Transmitter
 
-Aplicativo da [Zosma Labs](https://zosma.com.br) para transmissão portátil de
-tela via NDI no Windows. O objetivo é
-permitir que uma pessoa compartilhe um monitor na rede local sem instalar o
-pacote completo do NDI Tools na máquina de origem.
+**Transmissão NDI portátil com foco em simplicidade, controle e privacidade.**
 
-## Estado atual
+Aplicativo da [Zosma Labs](https://zosma.com.br) para transmitir vídeo e áudio pela rede local via NDI® no Windows, sem exigir a instalação do pacote completo do NDI Tools na máquina de origem.
 
-Versão para validação técnica:
+> **Versão atual: 0.3.1 Beta**
+
+[Baixar a versão mais recente](https://github.com/zosmalabs/transmissor-ndi-portatil/releases/latest) · [Site da Zosma](https://zosma.com.br)
+
+## Principais recursos
 
 - Windows 10 ou 11, 64 bits;
 - captura de monitor completo ou janela específica;
-- transmissão NDI High Bandwidth em 30 FPS;
-- nome configurável para a fonte;
+- transmissão de vídeo e áudio via NDI High Bandwidth;
+- opções de 30 e 60 FPS;
+- seleção da saída de áudio do Windows;
+- nome configurável para a fonte NDI;
 - cursor do mouse opcional;
-- modos rápido e protegido;
-- tela de espera com liberação manual do primeiro receptor;
-- contagem de receptores e bloqueio geral no modo protegido quando houver uma
-  conexão adicional;
-- proteção automática para WhatsApp, WhatsApp Business, WhatsApp Web, Telegram
-  Desktop e Telegram Web;
-- permissões temporárias que podem ser alteradas durante a transmissão;
-- intensidade do Wi-Fi, tráfego total de saída da máquina e FPS medido;
-- preferências básicas salvas no perfil do Windows;
-- janela Como usar e link para `zosma.com.br`;
-- execução portátil com a biblioteca redistribuível ao lado do executável;
-- log de diagnóstico salvo em `transmissor-ndi.log`.
-
-Ainda não inclui áudio, ajuste de resolução ou versões para macOS e Linux.
+- modos **Rápido** e **Protegido**;
+- autorização do receptor antes da liberação da imagem no modo protegido;
+- restrição do receptor por endereço IPv4 autorizado;
+- proteção automática para WhatsApp, WhatsApp Business, WhatsApp Web, Telegram Desktop e Telegram Web;
+- permissões temporárias de privacidade por execução;
+- ocultação da imagem sem encerrar a fonte NDI;
+- operação em segundo plano pela bandeja do Windows;
+- monitoramento da interface de rede e da qualidade da transmissão;
+- configurações persistentes entre execuções.
 
 ## Modos de transmissão
 
-- **Protegido:** a fonte começa com uma tela de espera. A imagem real só é
-  liberada após a confirmação do usuário. Se mais de um receptor for detectado,
-  a imagem é bloqueada para todos e exige nova confirmação.
-- **Rápido:** a imagem é enviada imediatamente. Conexões adicionais são
-  contabilizadas, mas não bloqueiam o conteúdo.
+### Protegido
 
-O SDK NDI padrão informa a quantidade de conexões, mas não identifica de forma
-confiável cada receptor. Por isso, o modo protegido bloqueia todos quando há uma
-conexão adicional.
+A fonte NDI pode ser iniciada sem liberar imediatamente a imagem capturada. O aplicativo aguarda o receptor autorizado e a transmissão da imagem é liberada manualmente no computador de origem. Também é possível restringir o receptor por endereço IPv4.
 
-## Modo Privacidade
+### Rápido
 
-As permissões de WhatsApp e Telegram sempre começam desativadas. A detecção é
-feita por janela/processo e, nos navegadores, pelo título da aba ativa. As
-notificações do Windows não são ocultadas; recomenda-se ativar **Não incomodar**.
+A captura é transmitida imediatamente, indicada para situações em que a rede e os receptores já são conhecidos e controlados.
 
-O valor em Mbps mostrado pelo aplicativo representa o tráfego total de saída
-das interfaces de rede do computador, não apenas o NDI.
+## Privacidade
+
+O Zosma Transmitter possui proteção para WhatsApp e Telegram. Quando conteúdo protegido é detectado na área efetivamente transmitida, a imagem pode ser temporariamente substituída por uma tela de privacidade sem encerrar a fonte NDI.
+
+As permissões para transmitir esses aplicativos são temporárias e não permanecem autorizadas após reiniciar o programa.
+
+As notificações do Windows não são ocultadas; para apresentações e transmissões, recomenda-se também utilizar o recurso **Não incomodar** do sistema.
+
+## Sobre a versão Beta
+
+Esta é uma versão Beta. Apesar dos testes realizados, ainda podem existir incompatibilidades com determinadas configurações de hardware, drivers, interfaces de áudio, redes ou softwares receptores. Feedback e relatos de problemas são bem-vindos.
+
+Atualmente o Zosma Transmitter está disponível para **Windows**. Versões para macOS e Linux não fazem parte desta release.
 
 ## Compilação automática
 
-O workflow **Compilar para Windows** gera um artifact em **Actions → Artifacts**. A
-compilação usa as interfaces públicas do NDI SDK e obtém o redistribuível pelo
-endereço oficial durante a execução do workflow.
+O workflow **Compilar para Windows** gera os artefatos do aplicativo pelo GitHub Actions. A compilação utiliza as interfaces públicas do NDI SDK e obtém o redistribuível oficial durante a execução do workflow.
 
-O uso das interfaces e do runtime do NDI está sujeito à licença do NDI SDK. O
-projeto não inclui o instalador do SDK nem o pacote NDI Tools.
-
-## Teste
-
-Consulte `README-TESTE.txt` antes de executar o protótipo.
+O uso das interfaces e do runtime do NDI está sujeito à licença do NDI SDK. O projeto não inclui o instalador completo do SDK nem o pacote NDI Tools.
 
 ## Desenvolvimento local
 
@@ -69,16 +63,27 @@ Requisitos:
 
 - Visual Studio 2022 com o workload **Desktop development with C++**;
 - CMake 3.24 ou superior;
-- `Processing.NDI.Lib.x64.dll` obtida do redistribuível oficial do NDI e
-  colocada ao lado do executável para rodar.
+- `Processing.NDI.Lib.x64.dll` obtida do redistribuível oficial do NDI e colocada ao lado do executável.
 
 ```powershell
 cmake -S . -B build -A x64
 cmake --build build --config Release
 ```
 
+## Zosma Labs
+
+**Ideias transformadas em software.**
+
+[zosma.com.br](https://zosma.com.br)
+
+## NDI®
+
+O Zosma Transmitter utiliza tecnologia **NDI®** para transmissão de vídeo e áudio em rede.
+
+**Zosma Transmitter é um software independente e não é afiliado, patrocinado, certificado ou desenvolvido pela Vizrt NDI AB.**
+
+NDI® é uma marca registrada da Vizrt NDI AB. Os avisos aplicáveis aos componentes de terceiros acompanham o pacote do aplicativo.
+
 ## Licença
 
-Nenhuma licença foi definida para o código do projeto nesta fase de testes.
-Os avisos aplicáveis aos componentes de terceiros estão em
-`THIRD_PARTY_NOTICES.md`.
+Nenhuma licença foi definida para o código do projeto nesta fase Beta. Consulte também `THIRD_PARTY_NOTICES.md` para os componentes de terceiros.
