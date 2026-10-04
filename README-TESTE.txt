@@ -15,7 +15,9 @@ COMO TESTAR
    a imagem.
 7. Clique em "Iniciar transmissão".
 8. No modo protegido, conecte o receptor e clique em "Liberar transmissão".
-9. No outro computador, procure a fonte pelo nome informado usando um receptor
+9. Durante a transmissão, use "Ocultar imagem" para bloquear manualmente imagem
+   e áudio sem desconectar a fonte NDI.
+10. No outro computador, procure a fonte pelo nome informado usando um receptor
    NDI, como o SPresenter, ProPresenter, Studio Monitor ou OBS com DistroAV.
 
 Os dois computadores devem estar na mesma rede local. Para o primeiro teste,
@@ -26,6 +28,7 @@ PRIVACIDADE E RECEPTORES
 - Todas as variantes identificadas do WhatsApp e do Telegram, incluindo Beta,
   Business e versões Web, começam protegidas em toda execução.
 - As permissões podem ser alteradas enquanto a transmissão estiver ativa.
+- A privacidade manual também pode ser acionada pelo botão "Ocultar imagem".
 - A proteção de páginas Web reconhece a aba ativa pelo título do navegador.
 - As notificações do Windows não são ocultadas. Ative "Não incomodar".
 - No modo protegido, uma conexão adicional bloqueia a imagem para todos.
