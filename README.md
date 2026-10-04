@@ -4,7 +4,7 @@
 
 Aplicativo da [Zosma Labs](https://zosma.com.br) para transmitir vídeo e áudio pela rede local via NDI® no Windows, sem exigir a instalação do pacote completo do NDI Tools na máquina de origem.
 
-> **Versão atual: 0.3.1 Beta**
+> **Versão atual: 0.3.2 Beta**
 
 [Baixar a versão mais recente](https://github.com/zosmalabs/transmissor-ndi-portatil/releases/latest) · [Site da Zosma](https://zosma.com.br)
 
@@ -14,18 +14,20 @@ Aplicativo da [Zosma Labs](https://zosma.com.br) para transmitir vídeo e áudio
 - captura de monitor completo ou janela específica;
 - transmissão de vídeo e áudio via NDI High Bandwidth;
 - opções de 30 e 60 FPS;
-- seleção da saída de áudio do Windows;
+- opção de enviar ou não o áudio do dispositivo padrão do Windows;
 - nome configurável para a fonte NDI;
 - cursor do mouse opcional;
 - modos **Rápido** e **Protegido**;
 - autorização do receptor antes da liberação da imagem no modo protegido;
 - restrição do receptor por endereço IPv4 autorizado;
-- proteção automática para WhatsApp, WhatsApp Business, WhatsApp Web, Telegram Desktop e Telegram Web;
+- proteção automática para WhatsApp, WhatsApp Beta, WhatsApp Business, WhatsApp Web, Telegram Desktop e Telegram Web;
 - permissões temporárias de privacidade por execução;
 - ocultação da imagem sem encerrar a fonte NDI;
 - operação em segundo plano pela bandeja do Windows;
 - monitoramento da interface de rede e da qualidade da transmissão;
 - configurações persistentes entre execuções.
+
+Na interface compacta, a opção **Enviar áudio** vem marcada por padrão. Ao desmarcá-la antes de iniciar, somente a imagem é transmitida.
 
 ## Modos de transmissão
 
@@ -39,7 +41,7 @@ A captura é transmitida imediatamente, indicada para situações em que a rede 
 
 ## Privacidade
 
-O Zosma Transmitter possui proteção para WhatsApp e Telegram. Quando conteúdo protegido é detectado na área efetivamente transmitida, a imagem pode ser temporariamente substituída por uma tela de privacidade sem encerrar a fonte NDI.
+O Zosma Transmitter possui proteção para qualquer variante identificada do WhatsApp e do Telegram. Quando conteúdo protegido é detectado na área efetivamente transmitida, a imagem é substituída por uma tela de privacidade sem encerrar a fonte NDI.
 
 As permissões para transmitir esses aplicativos são temporárias e não permanecem autorizadas após reiniciar o programa.
 
