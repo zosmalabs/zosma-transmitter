@@ -2,9 +2,6 @@
 
 #include <windows.h>
 #include <commctrl.h>
-#include <mmdeviceapi.h>
-#include <propsys.h>
-#include <propvarutil.h>
 #include <uxtheme.h>
 #include <ws2tcpip.h>
 
@@ -12,7 +9,6 @@
 #include <iterator>
 #include <mutex>
 #include <string>
-#include <vector>
 
 namespace {
 constexpr int kIdProtected = 1007;
@@ -23,23 +19,17 @@ constexpr int kIdStatus = 1014;
 constexpr int kIpEditId = 1201;
 constexpr int kIpLabelId = 1202;
 constexpr int kIpHintId = 1203;
-constexpr int kAudioComboId = 1210;
-
-const PROPERTYKEY kPkeyDeviceFriendlyName = {
-    {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
-    14
-};
+constexpr int kAudioOptionId = 1210;
 
 HWND gMain{};
 HWND gIpEdit{};
 HWND gIpLabel{};
 HWND gIpHint{};
-HWND gAudioCombo{};
+HWND gAudioOption{};
 std::mutex gIpMutex;
 std::string gConfiguredIp;
-std::wstring gConfiguredAudioDeviceId;
-std::vector<std::wstring> gAudioDeviceIds;
 std::atomic_bool gReleased{false};
+std::atomic_bool gAudioRequested{true};
 std::atomic_bool gAudioAllowed{false};
 HHOOK gHook{};
 
@@ -99,10 +89,10 @@ void refreshAudioState() {
         return;
     }
     if (!protectedMode()) {
-        gAudioAllowed = true;
+        gAudioAllowed = gAudioRequested.load();
         return;
     }
-    gAudioAllowed = gReleased.load();
+    gAudioAllowed = gAudioRequested.load() && gReleased.load();
 }
 
 void refreshControls() {
@@ -112,80 +102,13 @@ void refreshControls() {
     ShowWindow(gIpLabel, protectedSelected ? SW_SHOW : SW_HIDE);
     ShowWindow(gIpHint, protectedSelected ? SW_SHOW : SW_HIDE);
     EnableWindow(gIpEdit, protectedSelected && readyToStart());
-    if (gAudioCombo) EnableWindow(gAudioCombo, readyToStart());
+    if (gAudioOption) EnableWindow(gAudioOption, readyToStart());
     refreshAudioState();
 }
 
 void rememberConfiguredIp() {
     std::lock_guard<std::mutex> lock(gIpMutex);
     gConfiguredIp = protectedMode() ? utf8(controlText(gIpEdit)) : std::string{};
-}
-
-void rememberConfiguredAudioDevice() {
-    if (!gAudioCombo) return;
-    const int index = static_cast<int>(SendMessageW(gAudioCombo, CB_GETCURSEL, 0, 0));
-    std::lock_guard<std::mutex> lock(gIpMutex);
-    if (index >= 0 && index < static_cast<int>(gAudioDeviceIds.size()))
-        gConfiguredAudioDeviceId = gAudioDeviceIds[static_cast<size_t>(index)];
-    else
-        gConfiguredAudioDeviceId.clear();
-}
-
-void populateAudioDevices() {
-    if (!gAudioCombo) return;
-    SendMessageW(gAudioCombo, CB_RESETCONTENT, 0, 0);
-    gAudioDeviceIds.clear();
-    SendMessageW(gAudioCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Áudio · Dispositivo padrão do Windows"));
-    gAudioDeviceIds.emplace_back();
-
-    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool uninitialize = SUCCEEDED(init);
-    if (SUCCEEDED(init) || init == RPC_E_CHANGED_MODE) {
-        IMMDeviceEnumerator* enumerator = nullptr;
-        if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                       __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&enumerator))) && enumerator) {
-            IMMDeviceCollection* collection = nullptr;
-            if (SUCCEEDED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection)) && collection) {
-                UINT count = 0;
-                collection->GetCount(&count);
-                for (UINT i = 0; i < count; ++i) {
-                    IMMDevice* device = nullptr;
-                    if (FAILED(collection->Item(i, &device)) || !device) continue;
-
-                    LPWSTR id = nullptr;
-                    IPropertyStore* store = nullptr;
-                    std::wstring name;
-                    if (SUCCEEDED(device->GetId(&id)) && id &&
-                        SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store)) && store) {
-                        PROPVARIANT value;
-                        PropVariantInit(&value);
-                        if (SUCCEEDED(store->GetValue(kPkeyDeviceFriendlyName, &value)) &&
-                            value.vt == VT_LPWSTR && value.pwszVal) {
-                            name = value.pwszVal;
-                        }
-                        PropVariantClear(&value);
-                    }
-
-                    if (id) {
-                        if (name.empty()) name = L"Saída de áudio";
-                        const std::wstring label = L"Áudio · " + name;
-                        SendMessageW(gAudioCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-                        gAudioDeviceIds.emplace_back(id);
-                    }
-
-                    if (store) store->Release();
-                    if (id) CoTaskMemFree(id);
-                    device->Release();
-                }
-                collection->Release();
-            }
-            enumerator->Release();
-        }
-    }
-    if (uninitialize) CoUninitialize();
-
-    SendMessageW(gAudioCombo, CB_SETCURSEL, 0, 0);
-    rememberConfiguredAudioDevice();
 }
 
 LRESULT CALLBACK subclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
@@ -205,9 +128,10 @@ LRESULT CALLBACK subclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                     }
                 }
                 rememberConfiguredIp();
-                rememberConfiguredAudioDevice();
+                gAudioRequested = gAudioOption &&
+                    SendMessageW(gAudioOption, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 gReleased = !protectedMode();
-                gAudioAllowed = !protectedMode();
+                gAudioAllowed = gAudioRequested.load() && !protectedMode();
             } else {
                 gReleased = false;
                 gAudioAllowed = false;
@@ -215,8 +139,9 @@ LRESULT CALLBACK subclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         } else if (id == kIdRelease && protectedMode()) {
             gReleased = true;
             refreshAudioState();
-        } else if (id == kAudioComboId && HIWORD(wp) == CBN_SELCHANGE && readyToStart()) {
-            rememberConfiguredAudioDevice();
+        } else if (id == kAudioOptionId && readyToStart()) {
+            gAudioRequested = SendMessageW(gAudioOption, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            refreshAudioState();
         }
     } else if (msg == WM_TIMER || msg == WM_ENABLE || msg == WM_SHOWWINDOW) {
         refreshControls();
@@ -228,8 +153,7 @@ LRESULT CALLBACK subclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         gIpEdit = nullptr;
         gIpLabel = nullptr;
         gIpHint = nullptr;
-        gAudioCombo = nullptr;
-        gAudioDeviceIds.clear();
+        gAudioOption = nullptr;
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
@@ -240,33 +164,34 @@ void installUi(HWND hwnd) {
 
     HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     HWND cover = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-        568, 202, 376, 58, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+        536, 194, 374, 62, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
     SendMessageW(cover, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 
     gIpLabel = CreateWindowExW(0, L"STATIC", L"IP autorizado", WS_CHILD | WS_VISIBLE,
-        572, 207, 112, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpLabelId)),
+        540, 202, 102, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpLabelId)),
         GetModuleHandleW(nullptr), nullptr);
     gIpEdit = CreateWindowExW(0, L"EDIT", L"192.168.0.100",
         WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-        686, 202, 254, 30, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpEditId)),
+        648, 196, 258, 32, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpEditId)),
         GetModuleHandleW(nullptr), nullptr);
     gIpHint = CreateWindowExW(0, L"STATIC", L"Somente esta máquina poderá receber no Modo protegido.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        572, 236, 368, 20, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpHintId)),
+        540, 232, 366, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpHintId)),
         GetModuleHandleW(nullptr), nullptr);
 
-    gAudioCombo = CreateWindowExW(0, WC_COMBOBOXW, L"",
-        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
-        32, 618, 480, 220, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAudioComboId)),
+    gAudioOption = CreateWindowExW(0, L"BUTTON", L"Enviar áudio",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        330, 342, 168, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAudioOptionId)),
         GetModuleHandleW(nullptr), nullptr);
 
     SendMessageW(gIpLabel, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(gIpEdit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SendMessageW(gIpHint, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-    SendMessageW(gAudioCombo, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    SendMessageW(gAudioOption, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     SetWindowTheme(gIpEdit, L"DarkMode_Explorer", nullptr);
-    SetWindowTheme(gAudioCombo, L"DarkMode_Explorer", nullptr);
-    populateAudioDevices();
+    SetWindowTheme(gAudioOption, L"DarkMode_Explorer", nullptr);
+    SendMessageW(gAudioOption, BM_SETCHECK, BST_CHECKED, 0);
+    gAudioRequested = true;
     SetWindowSubclass(hwnd, subclassProc, 1, 0);
     refreshControls();
     InvalidateRect(hwnd, nullptr, FALSE);
@@ -300,8 +225,8 @@ std::string configuredReceiverIp() {
 }
 
 std::wstring configuredAudioDeviceId() {
-    std::lock_guard<std::mutex> lock(gIpMutex);
-    return gConfiguredAudioDeviceId;
+    // A interface compacta usa sempre a saída padrão do Windows.
+    return {};
 }
 
 bool audioTransmissionAllowed() {
