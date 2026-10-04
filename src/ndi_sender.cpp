@@ -12,8 +12,10 @@
 #include <objbase.h>
 #include <ws2tcpip.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -30,6 +32,7 @@ using NdiLoadFunction = const NDIlib_v6* (*)();
 using namespace std::chrono_literals;
 
 std::string gTrustedIp;
+std::atomic<float> gAudioOutputLevel{0.0f};
 
 class AudioWorker {
 public:
@@ -48,6 +51,7 @@ public:
         stopRequested_ = true;
         if (thread_.joinable()) thread_.join();
         running_ = false;
+        gAudioOutputLevel = 0.0f;
     }
 
     bool running() const { return running_.load(); }
@@ -120,6 +124,10 @@ private:
             }
         }
 
+        float peak = 0.0f;
+        for (const float sample : planar_) peak = (std::max)(peak, std::abs(sample));
+        gAudioOutputLevel = (std::min)(peak, 1.0f);
+
         NDIlib_audio_frame_v3_t audio{};
         audio.sample_rate = static_cast<int>(format->nSamplesPerSec);
         audio.no_channels = channels;
@@ -143,6 +151,8 @@ private:
 
             if (audioTransmissionAllowed() && frames > 0)
                 sendPacket(api, sender, format, data, frames, flags);
+            else
+                gAudioOutputLevel = 0.0f;
 
             capture->ReleaseBuffer(frames);
             packetFrames = 0;
@@ -443,3 +453,5 @@ int NdiSender::connections() const {
 }
 
 bool NdiSender::valid() const { return api_ && sender_; }
+
+float ndiAudioOutputLevel() { return gAudioOutputLevel.load(); }
