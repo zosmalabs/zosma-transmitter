@@ -241,16 +241,16 @@ void styleControlsOnce() {
 void adjustCardsOnce() {
     if (!gMain) return;
     if (HWND card = GetDlgItem(gMain, kIdProtected))
-        SetWindowPos(card, nullptr, 32, 414, 230, 78, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(card, nullptr, 32, 402, 218, 74, SWP_NOZORDER | SWP_NOACTIVATE);
     if (HWND card = GetDlgItem(gMain, kIdQuick))
-        SetWindowPos(card, nullptr, 274, 414, 238, 78, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(card, nullptr, 260, 402, 238, 74, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void paintHeader(HWND hwnd) {
     HDC dc = GetDC(hwnd);
     if (!dc) return;
-    // Só cobre a área do título. Não toca na faixa dos botões Sobre/Como usar.
-    RECT cover{20, 12, 680, 72};
+    // Só cobre a área do título. Não toca no botão principal nem nos botões auxiliares.
+    RECT cover{20, 12, 488, 72};
     HBRUSH bg = CreateSolidBrush(kBg);
     FillRect(dc, &cover, bg);
     DeleteObject(bg);
@@ -330,7 +330,7 @@ LRESULT CALLBACK aboutProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (body) SelectObject(dc, body);
         SetTextColor(dc, kMuted);
         r = {28, 60, 552, 84};
-        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.0 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.2 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         HBRUSH panel = CreateSolidBrush(kPanel);
         HPEN pen = CreatePen(PS_SOLID, 1, kBorder);
@@ -435,7 +435,7 @@ void install(HWND hwnd) {
 
     HFONT font = makeFont(15, FW_SEMIBOLD);
     HWND about = CreateWindowExW(0, L"BUTTON", L"Sobre", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        708, 18, 120, 34, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdAbout)), GetModuleHandleW(nullptr), nullptr);
+        666, 18, 114, 34, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdAbout)), GetModuleHandleW(nullptr), nullptr);
     SendMessageW(about, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     if (font) DeleteObject(font);
 
