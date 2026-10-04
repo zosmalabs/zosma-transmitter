@@ -237,8 +237,8 @@ void installUi(HWND hwnd) {
     }
     gTopSend = addStatic(hwnd, kTopSendId, 474, 100, 186, 27, normal);
     gTopPerformance = addStatic(hwnd, kTopPerformanceId, 700, 100, 200, 27, normal);
-    gFooterPrimary = addStatic(hwnd, kFooterPrimaryId, 548, 554, 350, 22, normal);
-    gFooterSecondary = addStatic(hwnd, kFooterSecondaryId, 548, 576, 350, 20, normal);
+    gFooterPrimary = addStatic(hwnd, kFooterPrimaryId, 548, 580, 350, 22, normal);
+    gFooterSecondary = addStatic(hwnd, kFooterSecondaryId, 548, 604, 350, 20, normal);
     SetWindowSubclass(hwnd, subclassProc, 3, 0);
     SetTimer(hwnd, kNetworkTimer, 1000, nullptr);
     updateNetworkStatus();
