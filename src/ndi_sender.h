@@ -35,3 +35,6 @@ private:
     int asyncVideoIndex_{0};
     bool asyncVideoSubmitted_{false};
 };
+
+// Nível instantâneo normalizado (0.0–1.0) da saída de áudio enviada.
+float ndiAudioOutputLevel();
