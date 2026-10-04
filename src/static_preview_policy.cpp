@@ -78,7 +78,7 @@ void installPolicy(HWND hwnd) {
     // Cobre o título pintado pelo código antigo sem alterar a estrutura principal.
     gReferenceTitle = CreateWindowExW(0, L"STATIC", L"Imagem de referência",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        572, 444, 220, 20, hwnd,
+        540, 424, 220, 20, hwnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kReferenceTitleId)),
         GetModuleHandleW(nullptr), nullptr);
 
@@ -86,7 +86,7 @@ void installPolicy(HWND hwnd) {
     gMonitorMessage = CreateWindowExW(0, L"STATIC",
         L"Monitor selecionado\r\n\r\nA prévia fica desativada para reduzir o uso de recursos.",
         WS_CHILD | SS_CENTER,
-        572, 460, 368, 186, hwnd,
+        540, 448, 366, 92, hwnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kMonitorMessageId)),
         GetModuleHandleW(nullptr), nullptr);
 
