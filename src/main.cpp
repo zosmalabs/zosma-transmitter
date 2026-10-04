@@ -231,15 +231,29 @@ PrivateApp classifyPrivateWindow(HWND hwnd) {
     const std::wstring proc = processName(hwnd);
     const std::wstring title = lower(getText(hwnd));
 
-    if (proc.find(L"whatsapp") != std::wstring::npos) return PrivateApp::WhatsApp;
-    if (proc.find(L"telegram") != std::wstring::npos) return PrivateApp::Telegram;
+    // Aplicativos empacotados e versões Beta/Business podem usar processos
+    // hospedeiros (por exemplo, WebView2 ou ApplicationFrameHost). Por isso a
+    // proteção não pode depender apenas do nome do executável: o título da
+    // janela também é uma identidade válida para qualquer processo.
+    if (proc.find(L"whatsapp") != std::wstring::npos ||
+        title.find(L"whatsapp") != std::wstring::npos)
+        return PrivateApp::WhatsApp;
+    if (proc.find(L"telegram") != std::wstring::npos ||
+        title.find(L"telegram") != std::wstring::npos)
+        return PrivateApp::Telegram;
 
-    const bool browser = proc == L"chrome.exe" || proc == L"msedge.exe" || proc == L"firefox.exe" ||
-                         proc == L"brave.exe" || proc == L"opera.exe" || proc == L"opera_gx.exe" ||
-                         proc == L"vivaldi.exe";
-    if (browser) {
-        if (title.find(L"whatsapp") != std::wstring::npos) return PrivateApp::WhatsApp;
-        if (title.find(L"telegram") != std::wstring::npos) return PrivateApp::Telegram;
+    // Alguns hosts exibem o título apenas na janela raiz ou proprietária.
+    const HWND relatedWindows[] = {GetAncestor(hwnd, GA_ROOT), GetWindow(hwnd, GW_OWNER)};
+    for (HWND candidate : relatedWindows) {
+        if (!candidate || candidate == hwnd || candidate == g.window) continue;
+        const std::wstring candidateProc = processName(candidate);
+        const std::wstring candidateTitle = lower(getText(candidate));
+        if (candidateProc.find(L"whatsapp") != std::wstring::npos ||
+            candidateTitle.find(L"whatsapp") != std::wstring::npos)
+            return PrivateApp::WhatsApp;
+        if (candidateProc.find(L"telegram") != std::wstring::npos ||
+            candidateTitle.find(L"telegram") != std::wstring::npos)
+            return PrivateApp::Telegram;
     }
     return PrivateApp::None;
 }
@@ -659,11 +673,12 @@ void stopTransmission() {
 void showHelp() {
     MessageBoxW(g.window,
         L"1. Escolha Monitor ou Janela e confirme a fonte na prévia.\n"
-        L"2. No Modo protegido, libere o receptor quando ele for detectado.\n"
-        L"3. Um receptor NDI pode abrir mais de uma conexão técnica; o app memoriza a linha de base.\n"
-        L"4. Se as conexões subirem acima da linha de base, a imagem é bloqueada.\n"
-        L"5. WhatsApp e Telegram são ocultados automaticamente na transmissão e na prévia.\n"
-        L"6. Marque a permissão correspondente para exibir um deles temporariamente.\n\n"
+        L"2. Desmarque Enviar áudio se quiser transmitir somente a imagem.\n"
+        L"3. No Modo protegido, libere o receptor quando ele for detectado.\n"
+        L"4. Um receptor NDI pode abrir mais de uma conexão técnica; o app memoriza a linha de base.\n"
+        L"5. Se as conexões subirem acima da linha de base, a imagem é bloqueada.\n"
+        L"6. Todas as versões do WhatsApp e do Telegram são ocultadas automaticamente.\n"
+        L"7. Marque a permissão correspondente para exibir um deles temporariamente.\n\n"
         L"O botão principal alterna entre Iniciar transmissão e Parar transmissão.",
         L"Como usar — V3", MB_OK | MB_ICONINFORMATION);
 }
@@ -708,32 +723,32 @@ void drawSmallText(HDC dc, int x, int y, const wchar_t* text, int width = 300) {
 }
 
 void createUi() {
-    g.help = addControl(L"BUTTON", L"?  Como usar", BS_PUSHBUTTON, 842, 18, 130, 34, IdHelp, gFont);
-    g.sourceName = addControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 32, 206, 480, 34, IdSourceName, gFont);
-    g.captureKind = addControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL, 32, 286, 150, 220, IdCaptureKind, gFont);
+    g.help = addControl(L"BUTTON", L"?  Como usar", BS_PUSHBUTTON, 792, 18, 130, 34, IdHelp, gFont);
+    g.start = addControl(L"BUTTON", L"Iniciar transmissão", BS_DEFPUSHBUTTON, 500, 18, 154, 34, IdStart, gFontBold);
+    g.sourceName = addControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 32, 208, 466, 34, IdSourceName, gFont);
+    g.captureKind = addControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL, 32, 274, 140, 220, IdCaptureKind, gFont);
     SendMessageW(g.captureKind, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Monitor"));
     SendMessageW(g.captureKind, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Janela"));
-    g.captureSource = addControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL, 192, 286, 270, 260, IdCaptureSource, gFont);
-    g.refresh = addControl(L"BUTTON", L"↻", BS_PUSHBUTTON, 472, 286, 40, 34, IdRefresh, gFontBold);
-    g.fps = addControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST, 32, 354, 125, 120, IdFps, gFont);
+    g.captureSource = addControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL, 182, 274, 266, 260, IdCaptureSource, gFont);
+    g.refresh = addControl(L"BUTTON", L"↻", BS_PUSHBUTTON, 458, 274, 40, 34, IdRefresh, gFontBold);
+    g.fps = addControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST, 32, 340, 120, 120, IdFps, gFont);
     SendMessageW(g.fps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"30 FPS"));
     SendMessageW(g.fps, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"60 FPS"));
-    g.cursor = addControl(L"BUTTON", L"Mostrar cursor", BS_AUTOCHECKBOX, 174, 356, 160, 28, IdCursor, gFont);
+    g.cursor = addControl(L"BUTTON", L"Mostrar cursor", BS_AUTOCHECKBOX, 166, 342, 150, 28, IdCursor, gFont);
     g.protectedMode = addControl(L"BUTTON", L"Modo protegido\r\nConfirma o receptor antes de liberar",
-        BS_AUTORADIOBUTTON | BS_MULTILINE | WS_GROUP, 32, 420, 230, 72, IdProtected, gFont);
+        BS_AUTORADIOBUTTON | BS_MULTILINE | WS_GROUP, 32, 402, 218, 74, IdProtected, gFont);
     g.quickMode = addControl(L"BUTTON", L"Modo rápido\r\nComeça a mostrar imediatamente",
-        BS_AUTORADIOBUTTON | BS_MULTILINE, 274, 420, 238, 72, IdQuick, gFont);
+        BS_AUTORADIOBUTTON | BS_MULTILINE, 260, 402, 238, 74, IdQuick, gFont);
     g.allowWhatsApp = addControl(L"BUTTON", L"Permitir envio do WhatsApp", BS_AUTOCHECKBOX,
-        32, 538, 480, 36, IdAllowWhatsApp, gFont);
+        32, 526, 226, 30, IdAllowWhatsApp, gFont);
     g.allowTelegram = addControl(L"BUTTON", L"Permitir envio do Telegram", BS_AUTOCHECKBOX,
-        32, 580, 480, 36, IdAllowTelegram, gFont);
+        270, 526, 228, 30, IdAllowTelegram, gFont);
 
-    g.release = addControl(L"BUTTON", L"Liberar transmissão", BS_PUSHBUTTON, 572, 332, 368, 40, IdRelease, gFontBold);
-    g.preview = CreateWindowExW(0, kPreviewClass, L"", WS_CHILD | WS_VISIBLE, 572, 460, 368, 186,
+    g.release = addControl(L"BUTTON", L"Liberar transmissão", BS_PUSHBUTTON, 540, 318, 366, 38, IdRelease, gFontBold);
+    g.preview = CreateWindowExW(0, kPreviewClass, L"", WS_CHILD | WS_VISIBLE, 540, 448, 366, 92,
         g.window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IdPreview)), GetModuleHandleW(nullptr), nullptr);
-    g.start = addControl(L"BUTTON", L"Iniciar transmissão", BS_DEFPUSHBUTTON, 744, 680, 196, 42, IdStart, gFontBold);
-    g.receivers = addControl(L"STATIC", L"Nenhum receptor", SS_LEFT | SS_ENDELLIPSIS, 274, 104, 190, 22, IdReceivers, gFontBold);
-    g.status = addControl(L"STATIC", L"Pronta para iniciar", SS_LEFT | SS_ENDELLIPSIS, 32, 104, 205, 22, IdStatus, gFontBold);
+    g.receivers = addControl(L"STATIC", L"Nenhum receptor", SS_LEFT | SS_ENDELLIPSIS, 252, 100, 190, 22, IdReceivers, gFontBold);
+    g.status = addControl(L"STATIC", L"Pronta para iniciar", SS_LEFT | SS_ENDELLIPSIS, 32, 100, 205, 22, IdStatus, gFontBold);
 }
 
 LRESULT CALLBACK previewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -826,38 +841,38 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT sub{32, 48, 420, 68};
         DrawTextW(dc, L"Windows · versão de testes", -1, &sub, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-        drawPanel(dc, {20, 80, 980, 146});
+        drawPanel(dc, {20, 78, 924, 138});
         drawSmallText(dc, 32, 84, L"Transmissão", 180);
-        drawSmallText(dc, 274, 84, L"Receptor", 170);
-        drawSmallText(dc, 510, 84, L"Envio", 150);
-        drawSmallText(dc, 748, 84, L"Desempenho", 180);
+        drawSmallText(dc, 252, 84, L"Receptor", 170);
+        drawSmallText(dc, 474, 84, L"Envio", 150);
+        drawSmallText(dc, 700, 84, L"Desempenho", 180);
         SetTextColor(dc, kText);
         SelectObject(dc, gFontBold);
-        RECT envio{510, 103, 690, 130};
+        RECT envio{474, 100, 660, 127};
         DrawTextW(dc, L"— Mbps", -1, &envio, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        RECT perf{748, 103, 930, 130};
+        RECT perf{700, 100, 900, 127};
         const wchar_t* perfText = g.stopRequested.load() ? L"Encerrando" :
             (g.privacyBlocked.load() ? L"Privacidade ativa" : (g.running.load() ? L"Em transmissão" : L"Aguardando"));
         DrawTextW(dc, perfText, -1, &perf, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-        drawPanel(dc, {20, 158, 536, 654});
-        drawPanel(dc, {552, 158, 960, 654});
-        drawSectionTitle(dc, 32, 172, L"Configuração da transmissão");
-        drawSmallText(dc, 32, 190, L"Nome da fonte NDI", 250);
-        drawSmallText(dc, 32, 266, L"O que deseja transmitir", 260);
-        drawSmallText(dc, 32, 334, L"Qualidade", 150);
-        drawSmallText(dc, 32, 400, L"Modo de transmissão", 220);
-        drawSectionTitle(dc, 32, 506, L"Permitir envio durante esta execução");
-        drawSmallText(dc, 32, 620, L"As permissões não são salvas e reiniciam protegidas.", 470);
+        drawPanel(dc, {20, 150, 510, 610});
+        drawPanel(dc, {522, 150, 924, 610});
+        drawSectionTitle(dc, 32, 164, L"Configuração da transmissão");
+        drawSmallText(dc, 32, 188, L"Nome da fonte NDI", 250);
+        drawSmallText(dc, 32, 252, L"O que deseja transmitir", 260);
+        drawSmallText(dc, 32, 318, L"Qualidade", 150);
+        drawSmallText(dc, 32, 380, L"Modo de transmissão", 220);
+        drawSectionTitle(dc, 32, 494, L"Permitir envio durante esta execução");
+        drawSmallText(dc, 32, 566, L"As permissões não são salvas e reiniciam protegidas.", 450);
 
-        drawSectionTitle(dc, 572, 172, L"Controle de acesso");
+        drawSectionTitle(dc, 540, 164, L"Controle de acesso");
         SetTextColor(dc, kText);
         SelectObject(dc, gFontTitle);
-        RECT number{572, 216, 940, 264};
+        RECT number{540, 216, 906, 258};
         DrawTextW(dc, g.rawConnections.load() == 0 ? L"0" : L"1", -1, &number, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, gFontSmall);
         SetTextColor(dc, kMuted);
-        RECT access{582, 266, 930, 318};
+        RECT access{550, 262, 896, 314};
         const wchar_t* accessText = g.rawConnections.load() == 0
             ? L"Nenhum receptor conectado. A imagem ficará em espera até sua confirmação."
             : g.additionalConnectionLock.load()
@@ -867,28 +882,20 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     : L"Receptor detectado. Clique em Liberar transmissão.";
         DrawTextW(dc, accessText, -1, &access, DT_CENTER | DT_WORDBREAK);
 
-        RECT privacy{572, 384, 940, 442};
+        RECT privacy{540, 368, 906, 420};
         HBRUSH privacyBrush = CreateSolidBrush(g.privacyBlocked.load() ? RGB(87, 55, 32) : RGB(20, 70, 54));
         FillRect(dc, &privacy, privacyBrush);
         DeleteObject(privacyBrush);
         SetTextColor(dc, g.privacyBlocked.load() ? RGB(255, 218, 176) : RGB(197, 246, 218));
         SelectObject(dc, gFontBold);
-        RECT p1{588, 390, 925, 416};
+        RECT p1{554, 372, 892, 396};
         DrawTextW(dc, g.privacyBlocked.load() ? L"Conteúdo privado bloqueado" : L"Modo Privacidade ativo", -1, &p1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, gFontSmall);
-        RECT p2{588, 414, 925, 438};
+        RECT p2{554, 394, 892, 416};
         DrawTextW(dc, L"WhatsApp e Telegram são protegidos automaticamente.", -1, &p2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        drawSectionTitle(dc, 572, 444, L"Prévia da captura");
+        drawSectionTitle(dc, 540, 424, L"Prévia da captura");
 
-        drawPanel(dc, {20, 666, 960, 736});
-        SetTextColor(dc, RGB(199, 238, 215));
-        SelectObject(dc, gFontBold);
-        RECT wifi{32, 678, 420, 704};
-        DrawTextW(dc, L"Rede · aguardando medição", -1, &wifi, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(dc, gFontSmall);
-        SetTextColor(dc, kMuted);
-        RECT q{32, 704, 600, 726};
-        DrawTextW(dc, L"30 fps · Prévia protegida · Qualidade automática", -1, &q, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        drawPanel(dc, {534, 548, 912, 598});
         SelectObject(dc, old);
         EndPaint(hwnd, &ps);
         return 0;
@@ -988,7 +995,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
 
     HWND hwnd = CreateWindowExW(0, kWindowClass, L"Transmissor NDI Portátil — V3",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1000, 790, nullptr, nullptr, instance, nullptr);
+        CW_USEDEFAULT, CW_USEDEFAULT, 960, 660, nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 1;
     ShowWindow(hwnd, show);
     UpdateWindow(hwnd);
