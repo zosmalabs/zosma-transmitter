@@ -30,8 +30,7 @@ void refreshPreviewMode() {
     if (preview) ShowWindow(preview, window ? SW_SHOW : SW_HIDE);
     if (gMonitorMessage) ShowWindow(gMonitorMessage, window ? SW_HIDE : SW_SHOW);
     if (gReferenceTitle) {
-        SetWindowTextW(gReferenceTitle, window ? L"Imagem de referência" : L"Captura selecionada");
-        ShowWindow(gReferenceTitle, SW_SHOW);
+        ShowWindow(gReferenceTitle, SW_HIDE);
     }
 }
 
@@ -78,7 +77,7 @@ void installPolicy(HWND hwnd) {
     // Cobre o título pintado pelo código antigo sem alterar a estrutura principal.
     gReferenceTitle = CreateWindowExW(0, L"STATIC", L"Imagem de referência",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        540, 424, 220, 20, hwnd,
+        0, 0, 1, 1, hwnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kReferenceTitleId)),
         GetModuleHandleW(nullptr), nullptr);
 
@@ -86,7 +85,7 @@ void installPolicy(HWND hwnd) {
     gMonitorMessage = CreateWindowExW(0, L"STATIC",
         L"Monitor selecionado\r\n\r\nA prévia fica desativada para reduzir o uso de recursos.",
         WS_CHILD | SS_CENTER,
-        540, 448, 366, 92, hwnd,
+        548, 418, 350, 132, hwnd,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kMonitorMessageId)),
         GetModuleHandleW(nullptr), nullptr);
 
