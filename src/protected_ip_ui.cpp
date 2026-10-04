@@ -1,4 +1,5 @@
 #include "protected_ip_ui.h"
+#include "tray_controller.h"
 
 #include <windows.h>
 #include <commctrl.h>
@@ -73,6 +74,7 @@ bool transmissionRunning() {
 }
 
 bool privacyActive() {
+    if (trayImageHidden()) return true;
     HWND status = gMain ? GetDlgItem(gMain, kIdStatus) : nullptr;
     if (!status) return false;
     const std::wstring text = controlText(status);
@@ -164,24 +166,24 @@ void installUi(HWND hwnd) {
 
     HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     HWND cover = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-        536, 194, 374, 62, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+        536, 184, 374, 68, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
     SendMessageW(cover, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 
     gIpLabel = CreateWindowExW(0, L"STATIC", L"IP autorizado", WS_CHILD | WS_VISIBLE,
-        540, 202, 102, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpLabelId)),
+        540, 190, 102, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpLabelId)),
         GetModuleHandleW(nullptr), nullptr);
     gIpEdit = CreateWindowExW(0, L"EDIT", L"192.168.0.100",
         WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-        648, 196, 258, 32, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpEditId)),
+        648, 184, 258, 36, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpEditId)),
         GetModuleHandleW(nullptr), nullptr);
     gIpHint = CreateWindowExW(0, L"STATIC", L"Somente esta máquina poderá receber no Modo protegido.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        540, 232, 366, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpHintId)),
+        540, 224, 366, 22, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIpHintId)),
         GetModuleHandleW(nullptr), nullptr);
 
     gAudioOption = CreateWindowExW(0, L"BUTTON", L"Enviar áudio",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        330, 342, 168, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAudioOptionId)),
+        306, 342, 116, 28, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAudioOptionId)),
         GetModuleHandleW(nullptr), nullptr);
 
     SendMessageW(gIpLabel, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -230,5 +232,5 @@ std::wstring configuredAudioDeviceId() {
 }
 
 bool audioTransmissionAllowed() {
-    return gAudioAllowed.load();
+    return gAudioAllowed.load() && !trayImageHidden();
 }
