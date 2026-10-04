@@ -200,7 +200,10 @@ LRESULT CALLBACK subclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
             return 0;
         }
         if (id == kIdTrayHide) {
-            if (transmissionRunning()) gHidden = !gHidden.load();
+            if (transmissionRunning()) {
+                gHidden = !gHidden.load();
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             return 0;
         }
         if (id == kIdTrayStop) {
@@ -263,6 +266,11 @@ struct TrayBootstrap {
 
 bool trayImageHidden() {
     return gHidden.load();
+}
+
+void traySetImageHidden(bool hidden) {
+    gHidden = hidden;
+    if (gMain) InvalidateRect(gMain, nullptr, FALSE);
 }
 
 void traySetSourceName(const std::string& sourceNameUtf8) {
