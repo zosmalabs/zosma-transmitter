@@ -16,6 +16,7 @@ constexpr int kIdQuick = 1008;
 constexpr int kIdStart = 1011;
 constexpr int kIdRelease = 1012;
 constexpr int kIdHelp = 1015;
+constexpr int kIdManualPrivacy = 1017;
 constexpr int kIdAbout = 1501;
 constexpr int kIdSite = 1502;
 constexpr int kIdLicenses = 1503;
@@ -73,6 +74,9 @@ void paintPushButton(HWND hwnd, HDC dc) {
         border = enabled ? RGB(94, 190, 255) : RGB(71, 82, 96);
     } else if (id == kIdRelease) {
         fill = enabled ? (hot ? RGB(48, 65, 86) : RGB(39, 52, 69)) : RGB(48, 53, 61);
+    } else if (id == kIdManualPrivacy) {
+        fill = enabled ? (down ? RGB(126, 67, 9) : hot ? RGB(180, 96, 15) : RGB(151, 78, 10)) : RGB(67, 60, 52);
+        border = enabled ? RGB(232, 139, 43) : RGB(94, 83, 70);
     } else if (hot) {
         fill = kPanelHot;
         border = RGB(84, 117, 155);
@@ -94,7 +98,23 @@ void paintPushButton(HWND hwnd, HDC dc) {
     HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, enabled ? kText : kDisabled);
-    DrawTextW(dc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT textRect = rc;
+    if (id == kIdStart) {
+        const int cy = rc.bottom / 2;
+        HPEN iconPen = CreatePen(PS_SOLID, 2, enabled ? RGB(246, 251, 255) : kDisabled);
+        HGDIOBJ oldIconPen = SelectObject(dc, iconPen);
+        HBRUSH iconBrush = CreateSolidBrush(enabled ? RGB(246, 251, 255) : kDisabled);
+        HGDIOBJ oldIconBrush = SelectObject(dc, iconBrush);
+        Ellipse(dc, 18, cy - 3, 24, cy + 3);
+        SelectObject(dc, oldIconBrush);
+        DeleteObject(iconBrush);
+        Arc(dc, 12, cy - 9, 30, cy + 9, 25, cy - 7, 25, cy + 7);
+        Arc(dc, 7, cy - 14, 35, cy + 14, 27, cy - 11, 27, cy + 11);
+        SelectObject(dc, oldIconPen);
+        DeleteObject(iconPen);
+        textRect.left = 32;
+    }
+    DrawTextW(dc, text, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (oldFont) SelectObject(dc, oldFont);
 }
 
@@ -156,38 +176,22 @@ void paintRadioCard(HWND hwnd, HDC dc) {
     DeleteObject(brush);
     DeleteObject(pen);
 
-    const int cy = 23;
-    HBRUSH dotBrush = CreateSolidBrush(checked ? kAccent : RGB(18, 29, 43));
-    HPEN dotPen = CreatePen(PS_SOLID, 2, checked ? kAccent : RGB(118, 145, 178));
-    oldBrush = SelectObject(dc, dotBrush);
-    oldPen = SelectObject(dc, dotPen);
-    Ellipse(dc, 14, cy - 8, 30, cy + 8);
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
-    DeleteObject(dotBrush);
-    DeleteObject(dotPen);
-
     wchar_t buffer[256]{};
     GetWindowTextW(hwnd, buffer, static_cast<int>(std::size(buffer)));
     std::wstring label = buffer;
     const size_t split = label.find(L"\r\n");
     const std::wstring title = split == std::wstring::npos ? label : label.substr(0, split);
-    const std::wstring body = split == std::wstring::npos ? L"" : label.substr(split + 2);
-
     HFONT titleFont = makeFont(15, FW_SEMIBOLD);
-    HFONT bodyFont = makeFont(14, FW_NORMAL);
     HGDIOBJ oldFont = titleFont ? SelectObject(dc, titleFont) : nullptr;
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, enabled ? kText : kDisabled);
-    RECT titleRect{42, 7, rc.right - 12, 31};
+    SetTextColor(dc, enabled ? (checked ? RGB(220, 241, 255) : kText) : kDisabled);
+    const wchar_t* symbol = GetDlgCtrlID(hwnd) == kIdProtected ? L"◆" : L"⚡";
+    RECT iconRect{18, 0, 48, rc.bottom};
+    DrawTextW(dc, symbol, -1, &iconRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT titleRect{48, 0, rc.right - 12, rc.bottom};
     DrawTextW(dc, title.c_str(), -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    if (bodyFont) SelectObject(dc, bodyFont);
-    SetTextColor(dc, enabled ? kMuted : kDisabled);
-    RECT bodyRect{42, 31, rc.right - 12, rc.bottom - 5};
-    DrawTextW(dc, body.c_str(), -1, &bodyRect, DT_LEFT | DT_TOP | DT_WORDBREAK);
     if (oldFont) SelectObject(dc, oldFont);
     if (titleFont) DeleteObject(titleFont);
-    if (bodyFont) DeleteObject(bodyFont);
 }
 
 LRESULT CALLBACK buttonProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
@@ -225,8 +229,10 @@ void styleOne(HWND child) {
         roundControl(child, 12);
         SetPropW(child, L"ZosmaStableStyled", reinterpret_cast<HANDLE>(1));
         InvalidateRect(child, nullptr, FALSE);
+    } else if (_wcsicmp(cls, L"Edit") == 0) {
+        roundControl(child, 10);
+        SetPropW(child, L"ZosmaStableStyled", reinterpret_cast<HANDLE>(1));
     }
-    // Edit e ComboBox ficam 100% nativos. Isso preserva os dropdowns sem flicker.
 }
 
 BOOL CALLBACK enumProc(HWND child, LPARAM) {
@@ -241,16 +247,16 @@ void styleControlsOnce() {
 void adjustCardsOnce() {
     if (!gMain) return;
     if (HWND card = GetDlgItem(gMain, kIdProtected))
-        SetWindowPos(card, nullptr, 32, 402, 218, 74, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(card, nullptr, 32, 402, 218, 56, SWP_NOZORDER | SWP_NOACTIVATE);
     if (HWND card = GetDlgItem(gMain, kIdQuick))
-        SetWindowPos(card, nullptr, 260, 402, 238, 74, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(card, nullptr, 260, 402, 238, 56, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void paintHeader(HWND hwnd) {
     HDC dc = GetDC(hwnd);
     if (!dc) return;
     // Só cobre a área do título. Não toca no botão principal nem nos botões auxiliares.
-    RECT cover{20, 12, 488, 72};
+    RECT cover{20, 10, 478, 72};
     HBRUSH bg = CreateSolidBrush(kBg);
     FillRect(dc, &cover, bg);
     DeleteObject(bg);
@@ -260,11 +266,13 @@ void paintHeader(HWND hwnd) {
     HFONT sub = makeFont(14, FW_NORMAL);
     HGDIOBJ oldFont = title ? SelectObject(dc, title) : nullptr;
     SetTextColor(dc, kText);
-    RECT r{28, 18, 570, 48};
+    HICON appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
+    if (appIcon) DrawIconEx(dc, 28, 17, appIcon, 42, 42, 0, nullptr, DI_NORMAL);
+    RECT r{82, 16, 478, 46};
     DrawTextW(dc, L"Zosma Transmitter", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (sub) SelectObject(dc, sub);
     SetTextColor(dc, kMuted);
-    r = {28, 48, 570, 69};
+    r = {82, 46, 478, 67};
     DrawTextW(dc, L"Uma solução Zosma Labs", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (oldFont) SelectObject(dc, oldFont);
     if (title) DeleteObject(title);
@@ -330,7 +338,7 @@ LRESULT CALLBACK aboutProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (body) SelectObject(dc, body);
         SetTextColor(dc, kMuted);
         r = {28, 60, 552, 84};
-        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.2 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.3 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         HBRUSH panel = CreateSolidBrush(kPanel);
         HPEN pen = CreatePen(PS_SOLID, 1, kBorder);
@@ -435,7 +443,7 @@ void install(HWND hwnd) {
 
     HFONT font = makeFont(15, FW_SEMIBOLD);
     HWND about = CreateWindowExW(0, L"BUTTON", L"Sobre", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        666, 18, 114, 34, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdAbout)), GetModuleHandleW(nullptr), nullptr);
+        678, 20, 116, 38, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdAbout)), GetModuleHandleW(nullptr), nullptr);
     SendMessageW(about, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     if (font) DeleteObject(font);
 
