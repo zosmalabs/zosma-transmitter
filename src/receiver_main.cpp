@@ -354,23 +354,26 @@ void drawRoundedButton(const DRAWITEMSTRUCT& item) {
 
     if (audio) {
         const bool checked = SendMessageW(item.hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
-        RECT box{bounds.left + 2, bounds.top + 6, bounds.left + 38, bounds.top + 26};
-        HBRUSH checkBrush = CreateSolidBrush(checked ? kAccent : RGB(36, 49, 66));
+        RECT box{bounds.left + 4, bounds.top + 6, bounds.left + 24, bounds.top + 26};
+        HBRUSH checkBrush = CreateSolidBrush(checked ? kAccent : RGB(25, 36, 51));
         HPEN checkPen = CreatePen(PS_SOLID, 1, checked ? kAccentBright : kBorder);
         oldBrush = SelectObject(item.hDC, checkBrush);
         oldPen = SelectObject(item.hDC, checkPen);
-        RoundRect(item.hDC, box.left, box.top, box.right, box.bottom, 20, 20);
-        HBRUSH knob = CreateSolidBrush(RGB(255, 255, 255));
-        SelectObject(item.hDC, knob);
-        SelectObject(item.hDC, GetStockObject(NULL_PEN));
-        const int knobLeft = checked ? box.right - 18 : box.left + 3;
-        Ellipse(item.hDC, knobLeft, box.top + 3, knobLeft + 14, box.top + 17);
+        RoundRect(item.hDC, box.left, box.top, box.right, box.bottom, 5, 5);
+        if (checked) {
+            HPEN tickPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+            SelectObject(item.hDC, tickPen);
+            MoveToEx(item.hDC, box.left + 5, box.top + 10, nullptr);
+            LineTo(item.hDC, box.left + 9, box.bottom - 5);
+            LineTo(item.hDC, box.right - 4, box.top + 5);
+            SelectObject(item.hDC, oldPen);
+            DeleteObject(tickPen);
+        }
         SelectObject(item.hDC, oldPen);
         SelectObject(item.hDC, oldBrush);
-        DeleteObject(knob);
         DeleteObject(checkPen);
         DeleteObject(checkBrush);
-        RECT label{bounds.left + 48, bounds.top, bounds.right - 4, bounds.bottom};
+        RECT label{bounds.left + 34, bounds.top, bounds.right - 4, bounds.bottom};
         DrawTextW(item.hDC, L"Reproduzir áudio", -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     } else {
         wchar_t label[128]{};
@@ -862,8 +865,12 @@ void paintPreview(HWND window) {
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
         SetStretchBltMode(backBuffer, COLORONCOLOR);
+        // The received frame is stored as a top-down DIB. StretchDIBits still
+        // interprets the source Y from the lower edge when selecting a partial
+        // rectangle, so translate the visual top/bottom crop accordingly.
+        const int sourceY = outputWindow ? sourceHeight - g.cropBottom : 0;
         StretchDIBits(backBuffer, x, y, drawWidth, drawHeight,
-                      cropLeft, cropTop, cropWidth, cropHeight,
+                      cropLeft, sourceY, cropWidth, cropHeight,
                       frame->pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
         if (!outputWindow) {
             g.previewImageRect = RECT{x, y, x + drawWidth, y + drawHeight};
