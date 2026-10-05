@@ -87,6 +87,7 @@ target_link_libraries(zosma-receiver PRIVATE
   comctl32
   dwmapi
   uxtheme
+  winmm
 )
 
 if(MSVC)

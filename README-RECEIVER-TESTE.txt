@@ -22,10 +22,10 @@ Firewall do Windows pergunte.
 ESCOPO DESTE PRIMEIRO TESTE
 
 - Descoberta automática de fontes NDI.
-- Recepção e prévia de vídeo.
+- Recepção e prévia de vídeo com renderização em buffer duplo.
+- Reprodução do áudio recebido na saída padrão do Windows.
 - Exibição da resolução e do FPS recebido.
 - Tela cheia, com saída pela tecla Esc.
-- Ainda não reproduz áudio.
 - Ainda não cria câmera virtual nem fonte direta no OBS.
 
 Este pacote é portátil e não exige a instalação do NDI Tools.
