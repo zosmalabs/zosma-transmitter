@@ -830,6 +830,11 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
 
+    case WM_ERASEBKGND:
+        // Todo o fundo é pintado no WM_PAINT. Impedir a limpeza anterior evita
+        // o clarão/piscar entre a pintura do painel e a dos controles filhos.
+        return 1;
+
     case WM_COMMAND: {
         const int id = LOWORD(wp);
         if (id == IdCaptureKind && HIWORD(wp) == CBN_SELCHANGE) refreshSources();
@@ -880,12 +885,14 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, kText);
         HFONT old = static_cast<HFONT>(SelectObject(dc, gFontTitle));
-        RECT title{32, 18, 520, 48};
-        DrawTextW(dc, L"Transmissor NDI Portátil", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        HICON appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
+        if (appIcon) DrawIconEx(dc, 28, 17, appIcon, 42, 42, 0, nullptr, DI_NORMAL);
+        RECT title{82, 16, 450, 46};
+        DrawTextW(dc, L"Zosma Transmitter", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, gFontSmall);
         SetTextColor(dc, kMuted);
-        RECT sub{32, 48, 420, 68};
-        DrawTextW(dc, L"Windows · versão de testes", -1, &sub, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT sub{82, 46, 450, 67};
+        DrawTextW(dc, L"Uma solução Zosma Labs", -1, &sub, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         drawPanel(dc, {20, 78, 924, 138});
         drawSmallText(dc, 32, 84, L"Transmissão", 180);
@@ -1047,8 +1054,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     wc.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&wc)) return 1;
 
+    startAudioLevelMonitoring();
+
     HWND hwnd = CreateWindowExW(0, kWindowClass, L"Transmissor NDI Portátil — V3",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 960, 690, nullptr, nullptr, instance, nullptr);
     if (!hwnd) return 1;
     ShowWindow(hwnd, show);
@@ -1063,6 +1072,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         g.stopRequested = true;
         g.worker.join();
     }
+    stopAudioLevelMonitoring();
     DeleteObject(gFont);
     DeleteObject(gFontSmall);
     DeleteObject(gFontBold);
