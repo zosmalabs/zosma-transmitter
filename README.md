@@ -4,7 +4,7 @@
 
 Aplicativo da [Zosma Labs](https://zosma.com.br) para transmitir vídeo e áudio pela rede local via NDI® no Windows, sem exigir a instalação do pacote completo do NDI Tools na máquina de origem.
 
-> **Versão atual: 0.3.5 Beta**
+> **Versão atual: 0.3.6 Beta**
 
 [Baixar a versão mais recente](https://github.com/zosmalabs/transmissor-ndi-portatil/releases/latest) · [Site da Zosma](https://zosma.com.br)
 
