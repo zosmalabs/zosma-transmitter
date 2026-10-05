@@ -40,7 +40,6 @@ public:
 
     void start(const NDIlib_v6* api, NDIlib_send_instance_t sender, std::wstring deviceId) {
         stop();
-        if (!api || !sender) return;
         stopRequested_ = false;
         thread_ = std::thread([this, api, sender, deviceId = std::move(deviceId)]() {
             run(api, sender, deviceId);
@@ -51,7 +50,6 @@ public:
         stopRequested_ = true;
         if (thread_.joinable()) thread_.join();
         running_ = false;
-        gAudioOutputLevel = 0.0f;
     }
 
     bool running() const { return running_.load(); }
@@ -136,7 +134,10 @@ private:
         audio.FourCC = NDIlib_FourCC_audio_type_FLTP;
         audio.p_data = reinterpret_cast<std::uint8_t*>(planar_.data());
         audio.channel_stride_in_bytes = static_cast<int>(frames * sizeof(float));
-        api->send_send_audio_v3(sender, &audio);
+        // O medidor funciona sempre. O envio só acontece quando há uma fonte NDI
+        // ativa e a opção de áudio está liberada.
+        if (api && sender && audioTransmissionAllowed())
+            api->send_send_audio_v3(sender, &audio);
     }
 
     void drain(const NDIlib_v6* api, NDIlib_send_instance_t sender,
@@ -149,10 +150,8 @@ private:
             DWORD flags = 0;
             if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
 
-            if (audioTransmissionAllowed() && frames > 0)
+            if (frames > 0)
                 sendPacket(api, sender, format, data, frames, flags);
-            else
-                gAudioOutputLevel = 0.0f;
 
             capture->ReleaseBuffer(frames);
             packetFrames = 0;
@@ -246,6 +245,7 @@ private:
 };
 
 AudioWorker gAudioWorker;
+AudioWorker gAudioMeterWorker;
 
 std::filesystem::path executableDirectory() {
     std::vector<wchar_t> buffer(32768);
@@ -455,3 +455,13 @@ int NdiSender::connections() const {
 bool NdiSender::valid() const { return api_ && sender_; }
 
 float ndiAudioOutputLevel() { return gAudioOutputLevel.load(); }
+
+void startAudioLevelMonitoring() {
+    if (!gAudioMeterWorker.running())
+        gAudioMeterWorker.start(nullptr, nullptr, configuredAudioDeviceId());
+}
+
+void stopAudioLevelMonitoring() {
+    gAudioMeterWorker.stop();
+    gAudioOutputLevel = 0.0f;
+}
