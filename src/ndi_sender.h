@@ -35,11 +35,3 @@ private:
     int asyncVideoIndex_{0};
     bool asyncVideoSubmitted_{false};
 };
-
-// Monitoramento contínuo do áudio reproduzido pelo Windows para o medidor da interface.
-void startAudioLevelMonitoring();
-void stopAudioLevelMonitoring();
-void restartAudioLevelMonitoring();
-
-// Nível instantâneo normalizado (0.0–1.0) da saída de áudio do Windows.
-float ndiAudioOutputLevel();
