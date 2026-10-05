@@ -353,7 +353,10 @@ void drawRoundedButton(const DRAWITEMSTRUCT& item) {
     SelectObject(item.hDC, gFont);
 
     if (audio) {
-        const bool checked = SendMessageW(item.hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        // BS_OWNERDRAW push buttons do not preserve BM_SETCHECK reliably.
+        // Draw from the real playback state so the checkbox always reflects
+        // what the audio receiver is actually doing.
+        const bool checked = g.audioEnabled.load();
         RECT box{bounds.left + 4, bounds.top + 6, bounds.left + 24, bounds.top + 26};
         HBRUSH checkBrush = CreateSolidBrush(checked ? kAccent : RGB(25, 36, 51));
         HPEN checkPen = CreatePen(PS_SOLID, 1, checked ? kAccentBright : kBorder);
@@ -381,7 +384,7 @@ void drawRoundedButton(const DRAWITEMSTRUCT& item) {
         DrawTextW(item.hDC, label, -1, &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    if (item.itemState & ODS_FOCUS) {
+    if (!audio && (item.itemState & ODS_FOCUS)) {
         RECT focus = bounds;
         InflateRect(&focus, -4, -4);
         DrawFocusRect(item.hDC, &focus);
