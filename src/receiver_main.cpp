@@ -1,13 +1,16 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <dwmapi.h>
+#include <mmsystem.h>
 #include <uxtheme.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -47,6 +50,103 @@ struct SourceInfo {
     std::string url;
 };
 
+class WaveOutPlayer {
+public:
+    ~WaveOutPlayer() { close(); }
+
+    bool submit(const NDIlib_audio_frame_v3_t& audio) {
+        if (!audio.p_data || audio.sample_rate <= 0 || audio.no_channels <= 0 || audio.no_samples <= 0)
+            return false;
+        if (!device_ || sampleRate_ != audio.sample_rate || channels_ != audio.no_channels) {
+            close();
+            if (!open(audio.sample_rate, audio.no_channels)) return false;
+        }
+
+        releaseCompleted();
+        // Evita acumular latência se a saída de áudio ficar temporariamente ocupada.
+        if (blocks_.size() >= 24) return false;
+
+        auto block = std::make_unique<Block>();
+        const size_t sampleCount = static_cast<size_t>(audio.no_samples) * static_cast<size_t>(audio.no_channels);
+        block->samples.resize(sampleCount);
+        const int stride = audio.channel_stride_in_bytes > 0
+            ? audio.channel_stride_in_bytes
+            : audio.no_samples * static_cast<int>(sizeof(float));
+
+        for (int sample = 0; sample < audio.no_samples; ++sample) {
+            for (int channel = 0; channel < audio.no_channels; ++channel) {
+                const auto* channelData = reinterpret_cast<const float*>(audio.p_data +
+                    static_cast<size_t>(channel) * static_cast<size_t>(stride));
+                const float value = std::clamp(channelData[sample], -1.0f, 1.0f);
+                block->samples[static_cast<size_t>(sample) * audio.no_channels + channel] =
+                    static_cast<std::int16_t>(std::lround(value * 32767.0f));
+            }
+        }
+
+        block->header.lpData = reinterpret_cast<LPSTR>(block->samples.data());
+        block->header.dwBufferLength = static_cast<DWORD>(block->samples.size() * sizeof(std::int16_t));
+        if (waveOutPrepareHeader(device_, &block->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
+            return false;
+        if (waveOutWrite(device_, &block->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) {
+            waveOutUnprepareHeader(device_, &block->header, sizeof(WAVEHDR));
+            return false;
+        }
+        blocks_.push_back(std::move(block));
+        return true;
+    }
+
+private:
+    struct Block {
+        WAVEHDR header{};
+        std::vector<std::int16_t> samples;
+    };
+
+    bool open(int sampleRate, int channels) {
+        WAVEFORMATEX format{};
+        format.wFormatTag = WAVE_FORMAT_PCM;
+        format.nChannels = static_cast<WORD>(channels);
+        format.nSamplesPerSec = static_cast<DWORD>(sampleRate);
+        format.wBitsPerSample = 16;
+        format.nBlockAlign = static_cast<WORD>(format.nChannels * format.wBitsPerSample / 8);
+        format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+        if (waveOutOpen(&device_, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+            device_ = nullptr;
+            return false;
+        }
+        sampleRate_ = sampleRate;
+        channels_ = channels;
+        return true;
+    }
+
+    void releaseCompleted() {
+        for (auto it = blocks_.begin(); it != blocks_.end();) {
+            if (((*it)->header.dwFlags & WHDR_DONE) == 0) {
+                ++it;
+                continue;
+            }
+            waveOutUnprepareHeader(device_, &(*it)->header, sizeof(WAVEHDR));
+            it = blocks_.erase(it);
+        }
+    }
+
+    void close() {
+        if (!device_) return;
+        waveOutReset(device_);
+        for (auto& block : blocks_)
+            waveOutUnprepareHeader(device_, &block->header, sizeof(WAVEHDR));
+        blocks_.clear();
+        waveOutClose(device_);
+        device_ = nullptr;
+        sampleRate_ = 0;
+        channels_ = 0;
+    }
+
+    HWAVEOUT device_{};
+    int sampleRate_{};
+    int channels_{};
+    std::vector<std::unique_ptr<Block>> blocks_;
+};
+
 struct State {
     HWND window{};
     HWND sources{};
@@ -73,6 +173,7 @@ struct State {
     int frameHeight{};
     int fps{};
     std::uint64_t framesReceived{};
+    std::atomic_bool audioActive{false};
 
     bool fullscreenMode{};
     WINDOWPLACEMENT previousPlacement{sizeof(WINDOWPLACEMENT)};
@@ -192,11 +293,13 @@ void refreshSources() {
 }
 
 void receiveLoop() {
+    WaveOutPlayer audioPlayer;
     auto started = std::chrono::steady_clock::now();
     int intervalFrames = 0;
     while (!g.stopRequested.load()) {
         NDIlib_video_frame_v2_t video{};
-        const NDIlib_frame_type_e type = g.ndi->recv_capture_v3(g.receiver, &video, nullptr, nullptr, 100);
+        NDIlib_audio_frame_v3_t audio{};
+        const NDIlib_frame_type_e type = g.ndi->recv_capture_v3(g.receiver, &video, &audio, nullptr, 100);
         if (type == NDIlib_frame_type_video) {
             if (video.p_data && video.xres > 0 && video.yres > 0) {
                 const size_t rowBytes = static_cast<size_t>(video.xres) * 4u;
@@ -226,6 +329,9 @@ void receiveLoop() {
                 PostMessageW(g.window, kFrameReady, 0, 0);
             }
             g.ndi->recv_free_video_v2(g.receiver, &video);
+        } else if (type == NDIlib_frame_type_audio) {
+            if (audioPlayer.submit(audio)) g.audioActive = true;
+            g.ndi->recv_free_audio_v3(g.receiver, &audio);
         } else if (type == NDIlib_frame_type_error) {
             break;
         }
@@ -240,6 +346,7 @@ void disconnectReceiver(bool updateUi = true) {
     g.receiver = nullptr;
     g.connected = false;
     g.stopRequested = false;
+    g.audioActive = false;
     EnableWindow(g.sources, TRUE);
     EnableWindow(g.refresh, TRUE);
     SetWindowTextW(g.connect, L"Conectar");
@@ -280,6 +387,7 @@ void connectReceiver() {
         g.frameHeight = 0;
         g.framesReceived = 0;
         g.fps = 0;
+        g.audioActive = false;
     }
     g.connected = true;
     g.stopRequested = false;
@@ -335,7 +443,15 @@ void paintPreview(HWND window) {
     HDC dc = BeginPaint(window, &paint);
     RECT client{};
     GetClientRect(window, &client);
-    FillRect(dc, &client, gPanelBrush);
+    const int clientWidth = std::max(1L, client.right - client.left);
+    const int clientHeight = std::max(1L, client.bottom - client.top);
+
+    // Todo o quadro é composto fora da tela e apresentado em uma única operação.
+    // Isso impede que o usuário veja o fundo limpo entre FillRect e StretchDIBits.
+    HDC backBuffer = CreateCompatibleDC(dc);
+    HBITMAP backBitmap = CreateCompatibleBitmap(dc, clientWidth, clientHeight);
+    HGDIOBJ previousBitmap = SelectObject(backBuffer, backBitmap);
+    FillRect(backBuffer, &client, gPanelBrush);
 
     std::vector<std::uint8_t> frame;
     int sourceWidth = 0;
@@ -364,18 +480,22 @@ void paintPreview(HWND window) {
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
-        SetStretchBltMode(dc, HALFTONE);
-        StretchDIBits(dc, x, y, drawWidth, drawHeight, 0, 0, sourceWidth, sourceHeight,
+        SetStretchBltMode(backBuffer, HALFTONE);
+        StretchDIBits(backBuffer, x, y, drawWidth, drawHeight, 0, 0, sourceWidth, sourceHeight,
                       frame.data(), &info, DIB_RGB_COLORS, SRCCOPY);
     } else {
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, kMuted);
-        SelectObject(dc, gFontBold);
-        DrawTextW(dc, g.connected.load() ? L"Aguardando o primeiro quadro…" : L"Selecione uma fonte NDI para iniciar",
+        SetBkMode(backBuffer, TRANSPARENT);
+        SetTextColor(backBuffer, kMuted);
+        SelectObject(backBuffer, gFontBold);
+        DrawTextW(backBuffer, g.connected.load() ? L"Aguardando o primeiro quadro…" : L"Selecione uma fonte NDI para iniciar",
                   -1, &client, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    FrameRect(dc, &client, GetSysColorBrush(COLOR_WINDOWFRAME));
+    FrameRect(backBuffer, &client, GetSysColorBrush(COLOR_WINDOWFRAME));
+    BitBlt(dc, 0, 0, clientWidth, clientHeight, backBuffer, 0, 0, SRCCOPY);
+    SelectObject(backBuffer, previousBitmap);
+    DeleteObject(backBitmap);
+    DeleteDC(backBuffer);
     EndPaint(window, &paint);
 }
 
@@ -440,7 +560,8 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         {
             std::lock_guard lock(g.frameMutex);
             details = std::to_wstring(g.frameWidth) + L" × " + std::to_wstring(g.frameHeight) +
-                      L"  •  " + std::to_wstring(g.fps) + L" FPS";
+                      L"  •  " + std::to_wstring(g.fps) + L" FPS" +
+                      (g.audioActive.load() ? L"  •  Áudio ativo" : L"");
         }
         setStatus(L"Recebendo vídeo", details);
         return 0;
