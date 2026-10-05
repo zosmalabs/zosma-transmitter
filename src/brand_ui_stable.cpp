@@ -171,7 +171,7 @@ void paintPushButton(HWND hwnd, HDC dc) {
         SelectObject(dc, oldIconPen);
         DeleteObject(iconPen);
         textRect.left = 36;
-        textRect.right -= 8;
+        textRect.right -= 2;
     }
     DrawTextW(dc, text, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (oldFont) SelectObject(dc, oldFont);
@@ -285,7 +285,9 @@ void styleOne(HWND child) {
     GetClassNameW(child, cls, static_cast<int>(std::size(cls)));
     if (_wcsicmp(cls, L"Button") == 0) {
         SetWindowSubclass(child, buttonProc, 171, 0);
-        roundControl(child, 12);
+        const UINT type = static_cast<UINT>(GetWindowLongPtrW(child, GWL_STYLE) & BS_TYPEMASK);
+        // Uma região arredondada no checkbox corta o quadrado localizado na borda esquerda.
+        if (type != BS_AUTOCHECKBOX && type != BS_CHECKBOX) roundControl(child, 12);
         SetPropW(child, L"ZosmaStableStyled", reinterpret_cast<HANDLE>(1));
         InvalidateRect(child, nullptr, FALSE);
     } else if (_wcsicmp(cls, L"Edit") == 0) {
@@ -316,34 +318,6 @@ void adjustCardsOnce() {
         SetWindowPos(card, nullptr, 32, 402, 218, 56, SWP_NOZORDER | SWP_NOACTIVATE);
     if (HWND card = GetDlgItem(gMain, kIdQuick))
         SetWindowPos(card, nullptr, 260, 402, 238, 56, SWP_NOZORDER | SWP_NOACTIVATE);
-}
-
-void paintHeader(HWND hwnd) {
-    HDC dc = GetDC(hwnd);
-    if (!dc) return;
-    // Só cobre a área do título. Não toca no botão principal nem nos botões auxiliares.
-    RECT cover{20, 10, 478, 72};
-    HBRUSH bg = CreateSolidBrush(kBg);
-    FillRect(dc, &cover, bg);
-    DeleteObject(bg);
-    SetBkMode(dc, TRANSPARENT);
-
-    HFONT title = makeFont(26, FW_SEMIBOLD);
-    HFONT sub = makeFont(14, FW_NORMAL);
-    HGDIOBJ oldFont = title ? SelectObject(dc, title) : nullptr;
-    SetTextColor(dc, kText);
-    HICON appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
-    if (appIcon) DrawIconEx(dc, 28, 17, appIcon, 42, 42, 0, nullptr, DI_NORMAL);
-    RECT r{82, 16, 478, 46};
-    DrawTextW(dc, L"Zosma Transmitter", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    if (sub) SelectObject(dc, sub);
-    SetTextColor(dc, kMuted);
-    r = {82, 46, 478, 67};
-    DrawTextW(dc, L"Uma solução Zosma Labs", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    if (oldFont) SelectObject(dc, oldFont);
-    if (title) DeleteObject(title);
-    if (sub) DeleteObject(sub);
-    ReleaseDC(hwnd, dc);
 }
 
 void showLicenseNotice(HWND owner) {
@@ -404,7 +378,7 @@ LRESULT CALLBACK aboutProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (body) SelectObject(dc, body);
         SetTextColor(dc, kMuted);
         r = {28, 60, 552, 84};
-        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.4 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.5 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         HBRUSH panel = CreateSolidBrush(kPanel);
         HPEN pen = CreatePen(PS_SOLID, 1, kBorder);
@@ -489,11 +463,6 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, D
         adjustCardsOnce();
         return 0;
     }
-    if (msg == WM_PAINT) {
-        const LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
-        paintHeader(hwnd);
-        return result;
-    }
     if (msg == WM_CTLCOLORLISTBOX) {
         HDC dc = reinterpret_cast<HDC>(wp);
         SetTextColor(dc, kText);
@@ -521,6 +490,8 @@ void install(HWND hwnd) {
     if (font) DeleteObject(font);
 
     SetWindowSubclass(hwnd, mainProc, 107, 0);
+    if (HWND start = GetDlgItem(hwnd, kIdStart))
+        SetWindowPos(start, nullptr, 456, 18, 210, 42, SWP_NOZORDER | SWP_NOACTIVATE);
     styleControlsOnce();
     adjustCardsOnce();
     // Uma única segunda passada pega controles auxiliares criados logo após o WM_CREATE.
