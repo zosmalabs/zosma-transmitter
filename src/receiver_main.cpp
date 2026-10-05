@@ -34,6 +34,9 @@ constexpr UINT_PTR kReconnectTimer = 101;
 constexpr COLORREF kBackground = RGB(10, 15, 24);
 constexpr COLORREF kPanel = RGB(19, 27, 39);
 constexpr COLORREF kBorder = RGB(45, 58, 76);
+constexpr COLORREF kControl = RGB(25, 36, 51);
+constexpr COLORREF kControlPressed = RGB(34, 48, 66);
+constexpr COLORREF kAccentBright = RGB(45, 211, 143);
 constexpr COLORREF kText = RGB(241, 245, 249);
 constexpr COLORREF kMuted = RGB(148, 163, 184);
 constexpr COLORREF kAccent = RGB(38, 177, 120);
@@ -307,6 +310,87 @@ void setFont(HWND control, HFONT font) {
 void setStatus(const std::wstring& status, const std::wstring& details = {}) {
     SetWindowTextW(g.status, status.c_str());
     SetWindowTextW(g.details, details.c_str());
+}
+
+void roundControl(HWND control, int width, int height, int radius = 16) {
+    HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
+    SetWindowRgn(control, region, TRUE);
+}
+
+void drawRoundedButton(const DRAWITEMSTRUCT& item) {
+    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const bool primary = item.CtlID == IdFullscreen;
+    const bool audio = item.CtlID == IdAudio;
+
+    RECT bounds = item.rcItem;
+    HBRUSH background = CreateSolidBrush(primary ? (pressed ? RGB(28, 150, 99) : kAccent)
+                                                   : (pressed ? kControlPressed : kControl));
+    HPEN border = CreatePen(PS_SOLID, 1, primary ? kAccentBright : kBorder);
+    HGDIOBJ oldBrush = SelectObject(item.hDC, background);
+    HGDIOBJ oldPen = SelectObject(item.hDC, border);
+    RoundRect(item.hDC, bounds.left, bounds.top, bounds.right, bounds.bottom, 14, 14);
+    SelectObject(item.hDC, oldPen);
+    SelectObject(item.hDC, oldBrush);
+    DeleteObject(border);
+    DeleteObject(background);
+
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, disabled ? RGB(93, 108, 128) : kText);
+    SelectObject(item.hDC, gFont);
+
+    if (audio) {
+        const bool checked = SendMessageW(item.hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        RECT box{bounds.left + 12, bounds.top + 6, bounds.left + 32, bounds.top + 26};
+        HBRUSH checkBrush = CreateSolidBrush(checked ? kAccent : RGB(12, 19, 29));
+        HPEN checkPen = CreatePen(PS_SOLID, 1, checked ? kAccentBright : kBorder);
+        oldBrush = SelectObject(item.hDC, checkBrush);
+        oldPen = SelectObject(item.hDC, checkPen);
+        RoundRect(item.hDC, box.left, box.top, box.right, box.bottom, 6, 6);
+        if (checked) {
+            HPEN tick = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+            HGDIOBJ oldTick = SelectObject(item.hDC, tick);
+            MoveToEx(item.hDC, box.left + 5, box.top + 10, nullptr);
+            LineTo(item.hDC, box.left + 9, box.top + 14);
+            LineTo(item.hDC, box.left + 16, box.top + 6);
+            SelectObject(item.hDC, oldTick);
+            DeleteObject(tick);
+        }
+        SelectObject(item.hDC, oldPen);
+        SelectObject(item.hDC, oldBrush);
+        DeleteObject(checkPen);
+        DeleteObject(checkBrush);
+        RECT label{bounds.left + 40, bounds.top, bounds.right - 8, bounds.bottom};
+        DrawTextW(item.hDC, L"Reproduzir áudio", -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        wchar_t label[128]{};
+        GetWindowTextW(item.hwndItem, label, 128);
+        DrawTextW(item.hDC, label, -1, &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    if (item.itemState & ODS_FOCUS) {
+        RECT focus = bounds;
+        InflateRect(&focus, -4, -4);
+        DrawFocusRect(item.hDC, &focus);
+    }
+}
+
+void drawDarkComboItem(const DRAWITEMSTRUCT& item) {
+    if (item.itemID == static_cast<UINT>(-1)) return;
+    const bool selected = (item.itemState & ODS_SELECTED) != 0;
+    HBRUSH background = CreateSolidBrush(selected ? RGB(31, 107, 82) : kControl);
+    FillRect(item.hDC, &item.rcItem, background);
+    DeleteObject(background);
+
+    wchar_t label[512]{};
+    SendMessageW(item.hwndItem, CB_GETLBTEXT, item.itemID, reinterpret_cast<LPARAM>(label));
+    RECT textRect = item.rcItem;
+    textRect.left += 12;
+    textRect.right -= 8;
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, kText);
+    SelectObject(item.hDC, gFont);
+    DrawTextW(item.hDC, label, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 bool loadNdi(std::wstring& error) {
@@ -603,17 +687,29 @@ void toggleOutput() {
 void layoutControls(int width, int height) {
     const int margin = 24;
     const int headerHeight = 76;
-    const int controlsHeight = 76;
+    const int controlsHeight = 104;
     const int statusHeight = 54;
     const int contentWidth = std::max(100, width - margin * 2);
 
-    const int sourceWidth = std::max(180, contentWidth - 650);
+    // Ações e fonte ficam na primeira linha. Monitor e áudio usam uma segunda
+    // linha para que os textos não sejam truncados em telas menores.
+    const int sourceWidth = std::max(260, contentWidth - 336);
     MoveWindow(g.sources, margin, headerHeight, sourceWidth, 38, TRUE);
-    MoveWindow(g.monitors, margin + sourceWidth + 10, headerHeight, 190, 200, TRUE);
-    MoveWindow(g.audio, margin + sourceWidth + 210, headerHeight + 8, 120, 24, TRUE);
-    MoveWindow(g.refresh, width - margin - 310, headerHeight, 90, 38, TRUE);
-    MoveWindow(g.connect, width - margin - 210, headerHeight, 100, 38, TRUE);
+    MoveWindow(g.refresh, width - margin - 326, headerHeight, 96, 38, TRUE);
+    MoveWindow(g.connect, width - margin - 220, headerHeight, 110, 38, TRUE);
     MoveWindow(g.fullscreen, width - margin - 100, headerHeight, 100, 38, TRUE);
+
+    const int secondRow = headerHeight + 46;
+    MoveWindow(g.monitors, margin, secondRow, std::min(360, contentWidth - 210), 240, TRUE);
+    MoveWindow(g.audio, margin + std::min(360, contentWidth - 210) + 16,
+               secondRow + 7, 180, 24, TRUE);
+
+    roundControl(g.sources, sourceWidth, 38);
+    roundControl(g.monitors, std::min(360, contentWidth - 210), 38);
+    roundControl(g.audio, 180, 32);
+    roundControl(g.refresh, 96, 38);
+    roundControl(g.connect, 110, 38);
+    roundControl(g.fullscreen, 100, 38);
 
     const int previewTop = headerHeight + controlsHeight;
     const int previewHeight = std::max(120, height - previewTop - statusHeight - margin);
@@ -722,17 +818,19 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     switch (message) {
     case WM_CREATE: {
         g.window = window;
-        g.sources = CreateWindowExW(0, WC_COMBOBOXW, nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+        g.sources = CreateWindowExW(0, WC_COMBOBOXW, nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST |
+                                    CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdSources), nullptr, nullptr);
-        g.refresh = CreateWindowExW(0, WC_BUTTONW, L"Atualizar", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        g.refresh = CreateWindowExW(0, WC_BUTTONW, L"Atualizar", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdRefresh), nullptr, nullptr);
-        g.connect = CreateWindowExW(0, WC_BUTTONW, L"Conectar", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        g.connect = CreateWindowExW(0, WC_BUTTONW, L"Conectar", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdConnect), nullptr, nullptr);
-        g.fullscreen = CreateWindowExW(0, WC_BUTTONW, L"Tela cheia", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        g.fullscreen = CreateWindowExW(0, WC_BUTTONW, L"Tela cheia", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                        0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdFullscreen), nullptr, nullptr);
-        g.monitors = CreateWindowExW(0, WC_COMBOBOXW, nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+        g.monitors = CreateWindowExW(0, WC_COMBOBOXW, nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST |
+                                     CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL,
                                      0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdMonitors), nullptr, nullptr);
-        g.audio = CreateWindowExW(0, WC_BUTTONW, L"Reproduzir áudio", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        g.audio = CreateWindowExW(0, WC_BUTTONW, L"Reproduzir áudio", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                   0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdAudio), nullptr, nullptr);
         g.preview = CreateWindowExW(0, kPreviewClass, nullptr, WS_CHILD | WS_VISIBLE,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdPreview), nullptr, nullptr);
@@ -755,6 +853,12 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_SIZE:
         layoutControls(LOWORD(lParam), HIWORD(lParam));
         return 0;
+    case WM_GETMINMAXINFO: {
+        auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
+        limits->ptMinTrackSize.x = 900;
+        limits->ptMinTrackSize.y = 600;
+        return 0;
+    }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IdRefresh:
@@ -767,7 +871,9 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             toggleOutput();
             return 0;
         case IdAudio:
-            g.audioEnabled = SendMessageW(g.audio, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g.audioEnabled = !g.audioEnabled.load();
+            SendMessageW(g.audio, BM_SETCHECK, g.audioEnabled.load() ? BST_CHECKED : BST_UNCHECKED, 0);
+            InvalidateRect(g.audio, nullptr, TRUE);
             return 0;
         }
         break;
@@ -804,6 +910,32 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         SetBkColor(dc, kBackground);
         SetTextColor(dc, reinterpret_cast<HWND>(lParam) == g.status ? kText : kMuted);
         return reinterpret_cast<LRESULT>(gBackgroundBrush);
+    }
+    case WM_CTLCOLORLISTBOX: {
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        SetBkColor(dc, kControl);
+        SetTextColor(dc, kText);
+        return reinterpret_cast<LRESULT>(gPanelBrush);
+    }
+    case WM_MEASUREITEM: {
+        auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+        if (measure->CtlType == ODT_COMBOBOX) {
+            measure->itemHeight = 34;
+            return TRUE;
+        }
+        break;
+    }
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+        if (item->CtlType == ODT_BUTTON) {
+            drawRoundedButton(*item);
+            return TRUE;
+        }
+        if (item->CtlType == ODT_COMBOBOX) {
+            drawDarkComboItem(*item);
+            return TRUE;
+        }
+        break;
     }
     case WM_ERASEBKGND:
         return 1;
