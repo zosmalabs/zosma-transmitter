@@ -465,3 +465,8 @@ void stopAudioLevelMonitoring() {
     gAudioMeterWorker.stop();
     gAudioOutputLevel = 0.0f;
 }
+
+void restartAudioLevelMonitoring() {
+    stopAudioLevelMonitoring();
+    startAudioLevelMonitoring();
+}
