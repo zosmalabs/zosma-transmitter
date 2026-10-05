@@ -5,6 +5,7 @@
 #include <uxtheme.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -48,6 +49,53 @@ enum ControlId {
 struct SourceInfo {
     std::string name;
     std::string url;
+};
+
+struct VideoFrameBuffer {
+    std::vector<std::uint8_t> pixels;
+    int width{};
+    int height{};
+};
+
+class PreviewBackBuffer {
+public:
+    ~PreviewBackBuffer() { reset(); }
+
+    bool ensure(HDC reference, int width, int height) {
+        if (dc_ && bitmap_ && width_ == width && height_ == height) return true;
+        reset();
+        dc_ = CreateCompatibleDC(reference);
+        if (!dc_) return false;
+        bitmap_ = CreateCompatibleBitmap(reference, width, height);
+        if (!bitmap_) {
+            reset();
+            return false;
+        }
+        previousBitmap_ = SelectObject(dc_, bitmap_);
+        width_ = width;
+        height_ = height;
+        return true;
+    }
+
+    HDC dc() const { return dc_; }
+
+    void reset() {
+        if (dc_ && previousBitmap_) SelectObject(dc_, previousBitmap_);
+        if (bitmap_) DeleteObject(bitmap_);
+        if (dc_) DeleteDC(dc_);
+        dc_ = nullptr;
+        bitmap_ = nullptr;
+        previousBitmap_ = nullptr;
+        width_ = 0;
+        height_ = 0;
+    }
+
+private:
+    HDC dc_{};
+    HBITMAP bitmap_{};
+    HGDIOBJ previousBitmap_{};
+    int width_{};
+    int height_{};
 };
 
 class WaveOutPlayer {
@@ -165,15 +213,19 @@ struct State {
     std::vector<SourceInfo> sourceList;
     std::atomic_bool connected{false};
     std::atomic_bool stopRequested{false};
-    std::thread worker;
+    std::thread videoWorker;
+    std::thread audioWorker;
 
     std::mutex frameMutex;
-    std::vector<std::uint8_t> frame;
+    std::array<std::shared_ptr<VideoFrameBuffer>, 3> framePool;
+    std::shared_ptr<VideoFrameBuffer> latestFrame;
+    size_t nextFrameBuffer{};
     int frameWidth{};
     int frameHeight{};
-    int fps{};
+    std::atomic_int fps{0};
     std::uint64_t framesReceived{};
     std::atomic_bool audioActive{false};
+    std::atomic_bool frameMessagePending{false};
 
     bool fullscreenMode{};
     WINDOWPLACEMENT previousPlacement{sizeof(WINDOWPLACEMENT)};
@@ -187,6 +239,7 @@ HFONT gFont{};
 HFONT gFontSmall{};
 HFONT gFontBold{};
 HFONT gFontTitle{};
+PreviewBackBuffer gPreviewBackBuffer;
 
 std::filesystem::path executableDirectory() {
     std::vector<wchar_t> path(32768);
@@ -292,28 +345,49 @@ void refreshSources() {
         setStatus(L"Fonte encontrada", L"Selecione o transmissor e clique em Conectar.");
 }
 
-void receiveLoop() {
-    WaveOutPlayer audioPlayer;
+std::shared_ptr<VideoFrameBuffer> acquireFrameBuffer() {
+    std::lock_guard lock(g.frameMutex);
+    for (size_t offset = 0; offset < g.framePool.size(); ++offset) {
+        const size_t index = (g.nextFrameBuffer + offset) % g.framePool.size();
+        auto& candidate = g.framePool[index];
+        if (!candidate) candidate = std::make_shared<VideoFrameBuffer>();
+        if (candidate.use_count() == 1) {
+            g.nextFrameBuffer = (index + 1) % g.framePool.size();
+            return candidate;
+        }
+    }
+
+    const size_t index = g.nextFrameBuffer;
+    auto replacement = std::make_shared<VideoFrameBuffer>();
+    g.framePool[index] = replacement;
+    g.nextFrameBuffer = (index + 1) % g.framePool.size();
+    return replacement;
+}
+
+void videoReceiveLoop() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     auto started = std::chrono::steady_clock::now();
     int intervalFrames = 0;
     while (!g.stopRequested.load()) {
         NDIlib_video_frame_v2_t video{};
-        NDIlib_audio_frame_v3_t audio{};
-        const NDIlib_frame_type_e type = g.ndi->recv_capture_v3(g.receiver, &video, &audio, nullptr, 100);
+        const NDIlib_frame_type_e type = g.ndi->recv_capture_v3(g.receiver, &video, nullptr, nullptr, 100);
         if (type == NDIlib_frame_type_video) {
             if (video.p_data && video.xres > 0 && video.yres > 0) {
                 const size_t rowBytes = static_cast<size_t>(video.xres) * 4u;
-                std::vector<std::uint8_t> copy(rowBytes * static_cast<size_t>(video.yres));
+                auto frame = acquireFrameBuffer();
+                frame->pixels.resize(rowBytes * static_cast<size_t>(video.yres));
+                frame->width = video.xres;
+                frame->height = video.yres;
                 const auto* source = video.p_data;
                 const int stride = video.line_stride_in_bytes != 0 ? video.line_stride_in_bytes : video.xres * 4;
                 for (int row = 0; row < video.yres; ++row) {
                     const int sourceRow = stride >= 0 ? row : (video.yres - 1 - row);
                     std::copy_n(source + static_cast<std::ptrdiff_t>(sourceRow) * std::abs(stride), rowBytes,
-                                copy.data() + static_cast<size_t>(row) * rowBytes);
+                                frame->pixels.data() + static_cast<size_t>(row) * rowBytes);
                 }
                 {
                     std::lock_guard lock(g.frameMutex);
-                    g.frame = std::move(copy);
+                    g.latestFrame = std::move(frame);
                     g.frameWidth = video.xres;
                     g.frameHeight = video.yres;
                     ++g.framesReceived;
@@ -326,12 +400,10 @@ void receiveLoop() {
                     intervalFrames = 0;
                     started = now;
                 }
-                PostMessageW(g.window, kFrameReady, 0, 0);
+                if (!g.frameMessagePending.exchange(true))
+                    PostMessageW(g.window, kFrameReady, 0, 0);
             }
             g.ndi->recv_free_video_v2(g.receiver, &video);
-        } else if (type == NDIlib_frame_type_audio) {
-            if (audioPlayer.submit(audio)) g.audioActive = true;
-            g.ndi->recv_free_audio_v3(g.receiver, &audio);
         } else if (type == NDIlib_frame_type_error) {
             break;
         }
@@ -339,9 +411,25 @@ void receiveLoop() {
     PostMessageW(g.window, kReceiverStopped, 0, 0);
 }
 
+void audioReceiveLoop() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    WaveOutPlayer audioPlayer;
+    while (!g.stopRequested.load()) {
+        NDIlib_audio_frame_v3_t audio{};
+        const NDIlib_frame_type_e type = g.ndi->recv_capture_v3(g.receiver, nullptr, &audio, nullptr, 100);
+        if (type == NDIlib_frame_type_audio) {
+            if (audioPlayer.submit(audio)) g.audioActive = true;
+            g.ndi->recv_free_audio_v3(g.receiver, &audio);
+        } else if (type == NDIlib_frame_type_error) {
+            break;
+        }
+    }
+}
+
 void disconnectReceiver(bool updateUi = true) {
     g.stopRequested = true;
-    if (g.worker.joinable()) g.worker.join();
+    if (g.videoWorker.joinable()) g.videoWorker.join();
+    if (g.audioWorker.joinable()) g.audioWorker.join();
     if (g.ndi && g.receiver) g.ndi->recv_destroy(g.receiver);
     g.receiver = nullptr;
     g.connected = false;
@@ -382,12 +470,15 @@ void connectReceiver() {
 
     {
         std::lock_guard lock(g.frameMutex);
-        g.frame.clear();
+        g.latestFrame.reset();
+        for (auto& frame : g.framePool) frame.reset();
+        g.nextFrameBuffer = 0;
         g.frameWidth = 0;
         g.frameHeight = 0;
         g.framesReceived = 0;
         g.fps = 0;
         g.audioActive = false;
+        g.frameMessagePending = false;
     }
     g.connected = true;
     g.stopRequested = false;
@@ -395,7 +486,8 @@ void connectReceiver() {
     EnableWindow(g.refresh, FALSE);
     SetWindowTextW(g.connect, L"Desconectar");
     setStatus(L"Conectando…", wide(selected.name));
-    g.worker = std::thread(receiveLoop);
+    g.videoWorker = std::thread(videoReceiveLoop);
+    g.audioWorker = std::thread(audioReceiveLoop);
 }
 
 void toggleFullscreen() {
@@ -446,24 +538,29 @@ void paintPreview(HWND window) {
     const int clientWidth = std::max(1L, client.right - client.left);
     const int clientHeight = std::max(1L, client.bottom - client.top);
 
-    // Todo o quadro é composto fora da tela e apresentado em uma única operação.
-    // Isso impede que o usuário veja o fundo limpo entre FillRect e StretchDIBits.
-    HDC backBuffer = CreateCompatibleDC(dc);
-    HBITMAP backBitmap = CreateCompatibleBitmap(dc, clientWidth, clientHeight);
-    HGDIOBJ previousBitmap = SelectObject(backBuffer, backBitmap);
+    // O bitmap é mantido entre quadros: em 1080p60, recriá-lo a cada pintura
+    // custa tempo suficiente para causar perda de fluidez e atrasar o áudio.
+    if (!gPreviewBackBuffer.ensure(dc, clientWidth, clientHeight)) {
+        FillRect(dc, &client, gPanelBrush);
+        EndPaint(window, &paint);
+        return;
+    }
+    HDC backBuffer = gPreviewBackBuffer.dc();
     FillRect(backBuffer, &client, gPanelBrush);
 
-    std::vector<std::uint8_t> frame;
+    std::shared_ptr<VideoFrameBuffer> frame;
     int sourceWidth = 0;
     int sourceHeight = 0;
     {
         std::lock_guard lock(g.frameMutex);
-        frame = g.frame;
-        sourceWidth = g.frameWidth;
-        sourceHeight = g.frameHeight;
+        frame = g.latestFrame;
+        if (frame) {
+            sourceWidth = frame->width;
+            sourceHeight = frame->height;
+        }
     }
 
-    if (!frame.empty() && sourceWidth > 0 && sourceHeight > 0) {
+    if (frame && !frame->pixels.empty() && sourceWidth > 0 && sourceHeight > 0) {
         const int targetWidth = client.right - client.left;
         const int targetHeight = client.bottom - client.top;
         const double scale = std::min(static_cast<double>(targetWidth) / sourceWidth,
@@ -480,9 +577,9 @@ void paintPreview(HWND window) {
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
-        SetStretchBltMode(backBuffer, HALFTONE);
+        SetStretchBltMode(backBuffer, COLORONCOLOR);
         StretchDIBits(backBuffer, x, y, drawWidth, drawHeight, 0, 0, sourceWidth, sourceHeight,
-                      frame.data(), &info, DIB_RGB_COLORS, SRCCOPY);
+                      frame->pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
     } else {
         SetBkMode(backBuffer, TRANSPARENT);
         SetTextColor(backBuffer, kMuted);
@@ -493,9 +590,6 @@ void paintPreview(HWND window) {
 
     FrameRect(backBuffer, &client, GetSysColorBrush(COLOR_WINDOWFRAME));
     BitBlt(dc, 0, 0, clientWidth, clientHeight, backBuffer, 0, 0, SRCCOPY);
-    SelectObject(backBuffer, previousBitmap);
-    DeleteObject(backBitmap);
-    DeleteDC(backBuffer);
     EndPaint(window, &paint);
 }
 
@@ -555,12 +649,13 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         if (wParam == kDiscoveryTimer && !g.connected.load()) refreshSources();
         return 0;
     case kFrameReady: {
+        g.frameMessagePending = false;
         InvalidateRect(g.preview, nullptr, FALSE);
         std::wstring details;
         {
             std::lock_guard lock(g.frameMutex);
             details = std::to_wstring(g.frameWidth) + L" × " + std::to_wstring(g.frameHeight) +
-                      L"  •  " + std::to_wstring(g.fps) + L" FPS" +
+                      L"  •  " + std::to_wstring(g.fps.load()) + L" FPS" +
                       (g.audioActive.load() ? L"  •  Áudio ativo" : L"");
         }
         setStatus(L"Recebendo vídeo", details);
