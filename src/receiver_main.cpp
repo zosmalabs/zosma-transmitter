@@ -745,8 +745,8 @@ void ensureCropBounds(int width, int height) {
 
 RECT cropScreenRect() {
     const RECT image = g.previewImageRect;
-    const int width = std::max(1, image.right - image.left);
-    const int height = std::max(1, image.bottom - image.top);
+    const int width = std::max(1, static_cast<int>(image.right - image.left));
+    const int height = std::max(1, static_cast<int>(image.bottom - image.top));
     RECT result{};
     result.left = image.left + MulDiv(g.cropLeft, width, std::max(1, g.cropSourceWidth));
     result.top = image.top + MulDiv(g.cropTop, height, std::max(1, g.cropSourceHeight));
@@ -793,8 +793,8 @@ int hitCropEdge(int x, int y) {
 
 void dragCropEdge(int x, int y) {
     const RECT image = g.previewImageRect;
-    const int displayWidth = std::max(1, image.right - image.left);
-    const int displayHeight = std::max(1, image.bottom - image.top);
+    const int displayWidth = std::max(1, static_cast<int>(image.right - image.left));
+    const int displayHeight = std::max(1, static_cast<int>(image.bottom - image.top));
     const int sourceX = std::clamp(MulDiv(x - image.left, g.cropSourceWidth, displayWidth), 0, g.cropSourceWidth);
     const int sourceY = std::clamp(MulDiv(y - image.top, g.cropSourceHeight, displayHeight), 0, g.cropSourceHeight);
     const int minWidth = std::max(32, g.cropSourceWidth / 20);
