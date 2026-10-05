@@ -25,29 +25,17 @@ jobs:
       - name: Compilar
         run: cmake --build build --config Release --parallel
 
-      - name: Obter o redistribuível oficial do NDI
+      - name: Obter o runtime NDI validado na versão 0.3.1
         timeout-minutes: 5
         shell: pwsh
         run: |
           $ProgressPreference = "SilentlyContinue"
-          $installerPath = "$env:RUNNER_TEMP\ndi-runtime.exe"
+          $packagePath = "$env:RUNNER_TEMP\zosma-v0.3.1.zip"
           $ndiRuntimeDir = "$env:RUNNER_TEMP\ndi-runtime"
-
           Invoke-WebRequest `
-            -Uri "https://ndi.link/NDIRedistV6" `
-            -OutFile $installerPath
-
-          $arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=`"$ndiRuntimeDir`""
-
-          $process = Start-Process `
-            -FilePath $installerPath `
-            -ArgumentList $arguments `
-            -Wait `
-            -PassThru
-
-          if ($process.ExitCode -ne 0) {
-            throw "O instalador do runtime NDI terminou com o código $($process.ExitCode)."
-          }
+            -Uri "https://github.com/zosmalabs/zosma-transmitter/releases/download/v0.3.1-beta/Zosma-Transmitter-v0.3.1-beta-Windows-x64.zip" `
+            -OutFile $packagePath
+          Expand-Archive -Path $packagePath -DestinationPath $ndiRuntimeDir -Force
 
       - name: Montar pacote portátil
         shell: pwsh
@@ -59,7 +47,7 @@ jobs:
             "dist\Zosma Transmitter.exe"
 
           $ndiDll = Get-ChildItem `
-            -Path "$env:RUNNER_TEMP\ndi-runtime", "C:\Program Files\NDI", "C:\Program Files\NewTek" `
+            -Path "$env:RUNNER_TEMP\ndi-runtime" `
             -Filter "Processing.NDI.Lib.x64.dll" `
             -Recurse `
             -ErrorAction SilentlyContinue |
