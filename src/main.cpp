@@ -733,24 +733,6 @@ void drawSmallText(HDC dc, int x, int y, const wchar_t* text, int width = 300) {
     SelectObject(dc, old);
 }
 
-void drawAudioMeter(HDC dc) {
-    drawSmallText(dc, 426, 318, L"Nível", 70);
-    const float level = ndiAudioOutputLevel();
-    constexpr int segments = 10;
-    constexpr int segmentWidth = 5;
-    constexpr int gap = 2;
-    const int lit = static_cast<int>(level * segments + 0.5f);
-    for (int i = 0; i < segments; ++i) {
-        const int x = 426 + i * (segmentWidth + gap);
-        RECT bar{x, 346, x + segmentWidth, 364};
-        COLORREF color = RGB(42, 55, 72);
-        if (i < lit) color = i < 7 ? RGB(47, 210, 111) : RGB(248, 190, 55);
-        HBRUSH brush = CreateSolidBrush(color);
-        FillRect(dc, &bar, brush);
-        DeleteObject(brush);
-    }
-}
-
 void createUi() {
     g.help = addControl(L"BUTTON", L"?  Como usar", BS_PUSHBUTTON, 806, 20, 116, 38, IdHelp, gFont);
     g.start = addControl(L"BUTTON", L"Iniciar transmissão", BS_DEFPUSHBUTTON, 476, 18, 190, 42, IdStart, gFontBold);
@@ -782,12 +764,20 @@ void createUi() {
 }
 
 LRESULT CALLBACK previewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_ERASEBKGND) return 1;
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps{};
-        HDC dc = BeginPaint(hwnd, &ps);
+        HDC target = BeginPaint(hwnd, &ps);
         RECT rc{};
         GetClientRect(hwnd, &rc);
+        HDC dc = CreateCompatibleDC(target);
+        HBITMAP bitmap = CreateCompatibleBitmap(target, rc.right, rc.bottom);
+        HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
         drawPreview(dc, rc);
+        BitBlt(target, 0, 0, rc.right, rc.bottom, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldBitmap);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -821,8 +811,6 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (wp == kPreviewTimer) {
             updatePreview();
-            RECT meter{424, 338, 498, 370};
-            InvalidateRect(hwnd, &meter, FALSE);
             if (g.manualPrivacy) {
                 SetWindowTextW(g.manualPrivacy, trayImageHidden() ? L"Mostrar imagem" : L"Ocultar imagem");
                 InvalidateRect(g.manualPrivacy, nullptr, FALSE);
@@ -878,9 +866,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_PAINT: {
         PAINTSTRUCT ps{};
-        HDC dc = BeginPaint(hwnd, &ps);
+        HDC target = BeginPaint(hwnd, &ps);
         RECT client{};
         GetClientRect(hwnd, &client);
+        HDC dc = CreateCompatibleDC(target);
+        HBITMAP bitmap = CreateCompatibleBitmap(target, client.right, client.bottom);
+        HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
         FillRect(dc, &client, gBgBrush);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, kText);
@@ -915,7 +906,6 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         drawSmallText(dc, 32, 252, L"O que deseja transmitir", 260);
         drawSmallText(dc, 32, 318, L"Qualidade", 150);
         drawSmallText(dc, 32, 380, L"Modo de transmissão", 220);
-        drawAudioMeter(dc);
         drawSectionTitle(dc, 32, 478, L"Permitir envio durante esta execução");
         drawSmallText(dc, 32, 554, L"As permissões não são salvas e reiniciam protegidas.", 450);
 
@@ -958,6 +948,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         drawPanel(dc, {534, 572, 912, 628});
         SelectObject(dc, old);
+        BitBlt(target, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
+        SelectObject(dc, oldBitmap);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -1054,8 +1048,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     wc.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&wc)) return 1;
 
-    startAudioLevelMonitoring();
-
     HWND hwnd = CreateWindowExW(0, kWindowClass, L"Transmissor NDI Portátil — V3",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 960, 690, nullptr, nullptr, instance, nullptr);
@@ -1072,7 +1064,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         g.stopRequested = true;
         g.worker.join();
     }
-    stopAudioLevelMonitoring();
     DeleteObject(gFont);
     DeleteObject(gFontSmall);
     DeleteObject(gFontBold);
