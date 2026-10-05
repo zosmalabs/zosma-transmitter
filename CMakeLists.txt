@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ZosmaTransmitter VERSION 0.3.3 LANGUAGES CXX)
+project(ZosmaTransmitter VERSION 0.3.4 LANGUAGES CXX)
 
 if(NOT WIN32)
   message(FATAL_ERROR "Este aplicativo suporta Windows 10/11 x64.")
