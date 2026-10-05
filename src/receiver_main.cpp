@@ -25,9 +25,11 @@ using namespace std::chrono_literals;
 
 constexpr wchar_t kWindowClass[] = L"ZosmaReceiverWindowV1";
 constexpr wchar_t kPreviewClass[] = L"ZosmaReceiverPreviewV1";
+constexpr wchar_t kOutputClass[] = L"ZosmaReceiverOutputV1";
 constexpr UINT kFrameReady = WM_APP + 1;
 constexpr UINT kReceiverStopped = WM_APP + 2;
 constexpr UINT_PTR kDiscoveryTimer = 100;
+constexpr UINT_PTR kReconnectTimer = 101;
 
 constexpr COLORREF kBackground = RGB(10, 15, 24);
 constexpr COLORREF kPanel = RGB(19, 27, 39);
@@ -41,6 +43,8 @@ enum ControlId {
     IdRefresh,
     IdConnect,
     IdFullscreen,
+    IdMonitors,
+    IdAudio,
     IdPreview,
     IdStatus,
     IdDetails
@@ -49,6 +53,12 @@ enum ControlId {
 struct SourceInfo {
     std::string name;
     std::string url;
+};
+
+struct MonitorInfo {
+    std::wstring name;
+    RECT bounds{};
+    bool primary{};
 };
 
 struct VideoFrameBuffer {
@@ -102,6 +112,8 @@ class WaveOutPlayer {
 public:
     ~WaveOutPlayer() { close(); }
 
+    void stop() { close(); }
+
     bool submit(const NDIlib_audio_frame_v3_t& audio) {
         if (!audio.p_data || audio.sample_rate <= 0 || audio.no_channels <= 0 || audio.no_samples <= 0)
             return false;
@@ -111,8 +123,9 @@ public:
         }
 
         releaseCompleted();
-        // Evita acumular latência se a saída de áudio ficar temporariamente ocupada.
-        if (blocks_.size() >= 24) return false;
+        if (started_ && blocks_.empty()) started_ = false;
+        // Mantém a latência limitada mesmo quando o dispositivo fica ocupado.
+        if (blocks_.size() + pending_.size() >= 24) return false;
 
         auto block = std::make_unique<Block>();
         const size_t sampleCount = static_cast<size_t>(audio.no_samples) * static_cast<size_t>(audio.no_channels);
@@ -131,15 +144,25 @@ public:
             }
         }
 
-        block->header.lpData = reinterpret_cast<LPSTR>(block->samples.data());
-        block->header.dwBufferLength = static_cast<DWORD>(block->samples.size() * sizeof(std::int16_t));
-        if (waveOutPrepareHeader(device_, &block->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
-            return false;
-        if (waveOutWrite(device_, &block->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) {
-            waveOutUnprepareHeader(device_, &block->header, sizeof(WAVEHDR));
-            return false;
+        pendingSamples_ += audio.no_samples;
+        pending_.push_back(std::move(block));
+
+        // Um pequeno buffer inicial absorve a variação de entrega da rede sem
+        // transformar a saída em uma reprodução perceptivelmente atrasada.
+        const int bufferedMilliseconds = static_cast<int>(pendingSamples_ * 1000LL / sampleRate_);
+        if (!started_ && bufferedMilliseconds < 80) return true;
+
+        while (!pending_.empty()) {
+            auto next = std::move(pending_.front());
+            pending_.erase(pending_.begin());
+            if (!queue(std::move(next))) {
+                pending_.clear();
+                pendingSamples_ = 0;
+                return false;
+            }
         }
-        blocks_.push_back(std::move(block));
+        pendingSamples_ = 0;
+        started_ = true;
         return true;
     }
 
@@ -166,6 +189,19 @@ private:
         return true;
     }
 
+    bool queue(std::unique_ptr<Block> block) {
+        block->header.lpData = reinterpret_cast<LPSTR>(block->samples.data());
+        block->header.dwBufferLength = static_cast<DWORD>(block->samples.size() * sizeof(std::int16_t));
+        if (waveOutPrepareHeader(device_, &block->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
+            return false;
+        if (waveOutWrite(device_, &block->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) {
+            waveOutUnprepareHeader(device_, &block->header, sizeof(WAVEHDR));
+            return false;
+        }
+        blocks_.push_back(std::move(block));
+        return true;
+    }
+
     void releaseCompleted() {
         for (auto it = blocks_.begin(); it != blocks_.end();) {
             if (((*it)->header.dwFlags & WHDR_DONE) == 0) {
@@ -183,16 +219,22 @@ private:
         for (auto& block : blocks_)
             waveOutUnprepareHeader(device_, &block->header, sizeof(WAVEHDR));
         blocks_.clear();
+        pending_.clear();
         waveOutClose(device_);
         device_ = nullptr;
         sampleRate_ = 0;
         channels_ = 0;
+        pendingSamples_ = 0;
+        started_ = false;
     }
 
     HWAVEOUT device_{};
     int sampleRate_{};
     int channels_{};
     std::vector<std::unique_ptr<Block>> blocks_;
+    std::vector<std::unique_ptr<Block>> pending_;
+    std::int64_t pendingSamples_{};
+    bool started_{};
 };
 
 struct State {
@@ -201,7 +243,10 @@ struct State {
     HWND refresh{};
     HWND connect{};
     HWND fullscreen{};
+    HWND monitors{};
+    HWND audio{};
     HWND preview{};
+    HWND output{};
     HWND status{};
     HWND details{};
 
@@ -211,6 +256,7 @@ struct State {
     NDIlib_recv_instance_t receiver{};
 
     std::vector<SourceInfo> sourceList;
+    std::vector<MonitorInfo> monitorList;
     std::atomic_bool connected{false};
     std::atomic_bool stopRequested{false};
     std::thread videoWorker;
@@ -225,11 +271,9 @@ struct State {
     std::atomic_int fps{0};
     std::uint64_t framesReceived{};
     std::atomic_bool audioActive{false};
+    std::atomic_bool audioEnabled{true};
     std::atomic_bool frameMessagePending{false};
 
-    bool fullscreenMode{};
-    WINDOWPLACEMENT previousPlacement{sizeof(WINDOWPLACEMENT)};
-    DWORD previousStyle{};
 };
 
 State g;
@@ -240,6 +284,7 @@ HFONT gFontSmall{};
 HFONT gFontBold{};
 HFONT gFontTitle{};
 PreviewBackBuffer gPreviewBackBuffer;
+PreviewBackBuffer gOutputBackBuffer;
 
 std::filesystem::path executableDirectory() {
     std::vector<wchar_t> path(32768);
@@ -418,7 +463,12 @@ void audioReceiveLoop() {
         NDIlib_audio_frame_v3_t audio{};
         const NDIlib_frame_type_e type = g.ndi->recv_capture_v3(g.receiver, nullptr, &audio, nullptr, 100);
         if (type == NDIlib_frame_type_audio) {
-            if (audioPlayer.submit(audio)) g.audioActive = true;
+            if (g.audioEnabled.load()) {
+                if (audioPlayer.submit(audio)) g.audioActive = true;
+            } else {
+                audioPlayer.stop();
+                g.audioActive = false;
+            }
             g.ndi->recv_free_audio_v3(g.receiver, &audio);
         } else if (type == NDIlib_frame_type_error) {
             break;
@@ -490,24 +540,63 @@ void connectReceiver() {
     g.audioWorker = std::thread(audioReceiveLoop);
 }
 
-void toggleFullscreen() {
-    if (!g.fullscreenMode) {
-        g.previousStyle = static_cast<DWORD>(GetWindowLongPtrW(g.window, GWL_STYLE));
-        GetWindowPlacement(g.window, &g.previousPlacement);
-        MONITORINFO monitor{sizeof(MONITORINFO)};
-        GetMonitorInfoW(MonitorFromWindow(g.window, MONITOR_DEFAULTTONEAREST), &monitor);
-        SetWindowLongPtrW(g.window, GWL_STYLE, g.previousStyle & ~static_cast<DWORD>(WS_OVERLAPPEDWINDOW));
-        SetWindowPos(g.window, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
-                     monitor.rcMonitor.right - monitor.rcMonitor.left,
-                     monitor.rcMonitor.bottom - monitor.rcMonitor.top,
-                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-        g.fullscreenMode = true;
-    } else {
-        SetWindowLongPtrW(g.window, GWL_STYLE, g.previousStyle);
-        SetWindowPlacement(g.window, &g.previousPlacement);
-        SetWindowPos(g.window, nullptr, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-        g.fullscreenMode = false;
+BOOL CALLBACK enumerateMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM) {
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(monitor, &info)) return TRUE;
+    MonitorInfo item;
+    item.bounds = info.rcMonitor;
+    item.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    const int width = info.rcMonitor.right - info.rcMonitor.left;
+    const int height = info.rcMonitor.bottom - info.rcMonitor.top;
+    item.name = L"Monitor " + std::to_wstring(g.monitorList.size() + 1) + L" — " +
+                std::to_wstring(width) + L" × " + std::to_wstring(height) +
+                (item.primary ? L" (principal)" : L"");
+    g.monitorList.push_back(std::move(item));
+    return TRUE;
+}
+
+void refreshMonitors() {
+    const int previous = static_cast<int>(SendMessageW(g.monitors, CB_GETCURSEL, 0, 0));
+    g.monitorList.clear();
+    SendMessageW(g.monitors, CB_RESETCONTENT, 0, 0);
+    EnumDisplayMonitors(nullptr, nullptr, enumerateMonitor, 0);
+    for (const auto& monitor : g.monitorList)
+        SendMessageW(g.monitors, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(monitor.name.c_str()));
+
+    int selection = previous;
+    if (selection < 0 || selection >= static_cast<int>(g.monitorList.size())) {
+        selection = 0;
+        for (size_t index = 0; index < g.monitorList.size(); ++index) {
+            if (!g.monitorList[index].primary) {
+                selection = static_cast<int>(index);
+                break;
+            }
+        }
+    }
+    if (!g.monitorList.empty()) SendMessageW(g.monitors, CB_SETCURSEL, selection, 0);
+}
+
+void closeOutput() {
+    if (g.output) DestroyWindow(g.output);
+}
+
+void toggleOutput() {
+    if (g.output) {
+        closeOutput();
+        return;
+    }
+    refreshMonitors();
+    const int selection = static_cast<int>(SendMessageW(g.monitors, CB_GETCURSEL, 0, 0));
+    if (selection < 0 || selection >= static_cast<int>(g.monitorList.size())) return;
+    const RECT bounds = g.monitorList[selection].bounds;
+    g.output = CreateWindowExW(WS_EX_TOPMOST, kOutputClass, L"Zosma Receiver — Telão",
+                               WS_POPUP | WS_VISIBLE, bounds.left, bounds.top,
+                               bounds.right - bounds.left, bounds.bottom - bounds.top,
+                               nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (g.output) {
+        SetWindowTextW(g.fullscreen, L"Fechar telão");
+        SetForegroundWindow(g.output);
     }
 }
 
@@ -518,10 +607,13 @@ void layoutControls(int width, int height) {
     const int statusHeight = 54;
     const int contentWidth = std::max(100, width - margin * 2);
 
-    MoveWindow(g.sources, margin, headerHeight, std::max(180, contentWidth - 330), 38, TRUE);
-    MoveWindow(g.refresh, width - margin - 318, headerHeight, 96, 38, TRUE);
-    MoveWindow(g.connect, width - margin - 212, headerHeight, 116, 38, TRUE);
-    MoveWindow(g.fullscreen, width - margin - 86, headerHeight, 86, 38, TRUE);
+    const int sourceWidth = std::max(180, contentWidth - 650);
+    MoveWindow(g.sources, margin, headerHeight, sourceWidth, 38, TRUE);
+    MoveWindow(g.monitors, margin + sourceWidth + 10, headerHeight, 190, 200, TRUE);
+    MoveWindow(g.audio, margin + sourceWidth + 210, headerHeight + 8, 120, 24, TRUE);
+    MoveWindow(g.refresh, width - margin - 310, headerHeight, 90, 38, TRUE);
+    MoveWindow(g.connect, width - margin - 210, headerHeight, 100, 38, TRUE);
+    MoveWindow(g.fullscreen, width - margin - 100, headerHeight, 100, 38, TRUE);
 
     const int previewTop = headerHeight + controlsHeight;
     const int previewHeight = std::max(120, height - previewTop - statusHeight - margin);
@@ -540,12 +632,13 @@ void paintPreview(HWND window) {
 
     // O bitmap é mantido entre quadros: em 1080p60, recriá-lo a cada pintura
     // custa tempo suficiente para causar perda de fluidez e atrasar o áudio.
-    if (!gPreviewBackBuffer.ensure(dc, clientWidth, clientHeight)) {
+    PreviewBackBuffer& buffer = window == g.output ? gOutputBackBuffer : gPreviewBackBuffer;
+    if (!buffer.ensure(dc, clientWidth, clientHeight)) {
         FillRect(dc, &client, gPanelBrush);
         EndPaint(window, &paint);
         return;
     }
-    HDC backBuffer = gPreviewBackBuffer.dc();
+    HDC backBuffer = buffer.dc();
     FillRect(backBuffer, &client, gPanelBrush);
 
     std::shared_ptr<VideoFrameBuffer> frame;
@@ -588,7 +681,8 @@ void paintPreview(HWND window) {
                   -1, &client, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    FrameRect(backBuffer, &client, GetSysColorBrush(COLOR_WINDOWFRAME));
+    if (window != g.output)
+        FrameRect(backBuffer, &client, GetSysColorBrush(COLOR_WINDOWFRAME));
     BitBlt(dc, 0, 0, clientWidth, clientHeight, backBuffer, 0, 0, SRCCOPY);
     EndPaint(window, &paint);
 }
@@ -599,6 +693,28 @@ LRESULT CALLBACK previewProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         return 0;
     }
     if (message == WM_ERASEBKGND) return 1;
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+LRESULT CALLBACK outputProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+    case WM_PAINT:
+        paintPreview(window);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE) {
+            DestroyWindow(window);
+            return 0;
+        }
+        break;
+    case WM_DESTROY:
+        gOutputBackBuffer.reset();
+        if (g.output == window) g.output = nullptr;
+        if (g.fullscreen) SetWindowTextW(g.fullscreen, L"Exibir telão");
+        return 0;
+    }
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
@@ -614,6 +730,10 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdConnect), nullptr, nullptr);
         g.fullscreen = CreateWindowExW(0, WC_BUTTONW, L"Tela cheia", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                        0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdFullscreen), nullptr, nullptr);
+        g.monitors = CreateWindowExW(0, WC_COMBOBOXW, nullptr, WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL,
+                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdMonitors), nullptr, nullptr);
+        g.audio = CreateWindowExW(0, WC_BUTTONW, L"Reproduzir áudio", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                  0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdAudio), nullptr, nullptr);
         g.preview = CreateWindowExW(0, kPreviewClass, nullptr, WS_CHILD | WS_VISIBLE,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdPreview), nullptr, nullptr);
         g.status = CreateWindowExW(0, WC_STATICW, L"Inicializando…", WS_CHILD | WS_VISIBLE,
@@ -621,11 +741,14 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g.details = CreateWindowExW(0, WC_STATICW, L"Teste inicial de recepção de vídeo", WS_CHILD | WS_VISIBLE | SS_RIGHT,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdDetails), nullptr, nullptr);
 
-        for (HWND control : {g.sources, g.refresh, g.connect, g.fullscreen, g.status, g.details}) {
+        for (HWND control : {g.sources, g.monitors, g.audio, g.refresh, g.connect, g.fullscreen, g.status, g.details}) {
             setFont(control, gFont);
             SetWindowTheme(control, L"DarkMode_Explorer", nullptr);
         }
         setFont(g.status, gFontBold);
+        SendMessageW(g.audio, BM_SETCHECK, BST_CHECKED, 0);
+        SetWindowTextW(g.fullscreen, L"Exibir telão");
+        refreshMonitors();
         SetTimer(window, kDiscoveryTimer, 1000, nullptr);
         return 0;
     }
@@ -641,16 +764,24 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             connectReceiver();
             return 0;
         case IdFullscreen:
-            toggleFullscreen();
+            toggleOutput();
+            return 0;
+        case IdAudio:
+            g.audioEnabled = SendMessageW(g.audio, BM_GETCHECK, 0, 0) == BST_CHECKED;
             return 0;
         }
         break;
     case WM_TIMER:
         if (wParam == kDiscoveryTimer && !g.connected.load()) refreshSources();
+        if (wParam == kReconnectTimer) {
+            KillTimer(window, kReconnectTimer);
+            if (!g.connected.load()) connectReceiver();
+        }
         return 0;
     case kFrameReady: {
         g.frameMessagePending = false;
         InvalidateRect(g.preview, nullptr, FALSE);
+        if (g.output) InvalidateRect(g.output, nullptr, FALSE);
         std::wstring details;
         {
             std::lock_guard lock(g.frameMutex);
@@ -662,11 +793,11 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         return 0;
     }
     case kReceiverStopped:
-        if (g.connected.load() && !g.stopRequested.load())
-            setStatus(L"Sinal interrompido", L"O receptor tentará permanecer disponível; desconecte e conecte novamente.");
-        return 0;
-    case WM_KEYDOWN:
-        if (wParam == VK_ESCAPE && g.fullscreenMode) toggleFullscreen();
+        if (g.connected.load() && !g.stopRequested.load()) {
+            setStatus(L"Sinal interrompido", L"Reconectando automaticamente…");
+            disconnectReceiver(false);
+            SetTimer(window, kReconnectTimer, 1000, nullptr);
+        }
         return 0;
     case WM_CTLCOLORSTATIC: {
         HDC dc = reinterpret_cast<HDC>(wParam);
@@ -699,6 +830,8 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         return 0;
     case WM_DESTROY:
         KillTimer(window, kDiscoveryTimer);
+        KillTimer(window, kReconnectTimer);
+        closeOutput();
         disconnectReceiver(false);
         PostQuitMessage(0);
         return 0;
@@ -730,6 +863,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     previewClass.hbrBackground = gPanelBrush;
     previewClass.lpszClassName = kPreviewClass;
     RegisterClassExW(&previewClass);
+
+    WNDCLASSEXW outputClass{sizeof(WNDCLASSEXW)};
+    outputClass.style = CS_HREDRAW | CS_VREDRAW;
+    outputClass.lpfnWndProc = outputProc;
+    outputClass.hInstance = instance;
+    outputClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    outputClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    outputClass.lpszClassName = kOutputClass;
+    RegisterClassExW(&outputClass);
 
     WNDCLASSEXW windowClass{sizeof(WNDCLASSEXW)};
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
