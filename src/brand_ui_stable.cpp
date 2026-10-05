@@ -30,6 +30,7 @@ constexpr COLORREF kAccent = RGB(38, 151, 255);
 constexpr COLORREF kText = RGB(242, 247, 255);
 constexpr COLORREF kMuted = RGB(159, 181, 211);
 constexpr COLORREF kDisabled = RGB(105, 119, 137);
+constexpr UINT_PTR kComboSubclass = 172;
 
 HWND gMain{};
 HWND gAbout{};
@@ -57,6 +58,63 @@ void roundControl(HWND hwnd, int radius) {
     if (!hwnd || !GetClientRect(hwnd, &rc) || rc.right <= 0 || rc.bottom <= 0) return;
     HRGN rgn = CreateRoundRectRgn(0, 0, rc.right + 1, rc.bottom + 1, radius, radius);
     SetWindowRgn(hwnd, rgn, TRUE);
+}
+
+void paintCombo(HWND hwnd, HDC dc) {
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    const bool enabled = IsWindowEnabled(hwnd) != FALSE;
+    const bool focused = GetFocus() == hwnd;
+
+    HBRUSH brush = CreateSolidBrush(RGB(17, 27, 40));
+    HPEN pen = CreatePen(PS_SOLID, focused ? 2 : 1, focused ? kAccent : kBorder);
+    HGDIOBJ oldBrush = SelectObject(dc, brush);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, 10, 10);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+
+    wchar_t text[512]{};
+    const int selected = static_cast<int>(SendMessageW(hwnd, CB_GETCURSEL, 0, 0));
+    if (selected >= 0) SendMessageW(hwnd, CB_GETLBTEXT, selected, reinterpret_cast<LPARAM>(text));
+    HFONT font = reinterpret_cast<HFONT>(SendMessageW(hwnd, WM_GETFONT, 0, 0));
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, enabled ? kText : kDisabled);
+    RECT tr{12, 0, rc.right - 38, rc.bottom};
+    DrawTextW(dc, text, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    HPEN arrowPen = CreatePen(PS_SOLID, 2, enabled ? RGB(201, 220, 244) : kDisabled);
+    HGDIOBJ oldArrow = SelectObject(dc, arrowPen);
+    const int cx = rc.right - 19;
+    const int cy = rc.bottom / 2;
+    MoveToEx(dc, cx - 5, cy - 2, nullptr);
+    LineTo(dc, cx, cy + 3);
+    LineTo(dc, cx + 5, cy - 2);
+    SelectObject(dc, oldArrow);
+    DeleteObject(arrowPen);
+    if (oldFont) SelectObject(dc, oldFont);
+}
+
+LRESULT CALLBACK comboProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps{};
+        HDC dc = BeginPaint(hwnd, &ps);
+        paintCombo(hwnd, dc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    if (msg == WM_NCPAINT) return 0;
+    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_ENABLE ||
+        msg == CB_SETCURSEL || msg == WM_LBUTTONUP || msg == WM_KEYUP) {
+        const LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return result;
+    }
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, comboProc, kComboSubclass);
+    return DefSubclassProc(hwnd, msg, wp, lp);
 }
 
 void paintPushButton(HWND hwnd, HDC dc) {
@@ -112,7 +170,8 @@ void paintPushButton(HWND hwnd, HDC dc) {
         Arc(dc, 7, cy - 14, 35, cy + 14, 27, cy - 11, 27, cy + 11);
         SelectObject(dc, oldIconPen);
         DeleteObject(iconPen);
-        textRect.left = 32;
+        textRect.left = 36;
+        textRect.right -= 8;
     }
     DrawTextW(dc, text, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (oldFont) SelectObject(dc, oldFont);
@@ -232,6 +291,13 @@ void styleOne(HWND child) {
     } else if (_wcsicmp(cls, L"Edit") == 0) {
         roundControl(child, 10);
         SetPropW(child, L"ZosmaStableStyled", reinterpret_cast<HANDLE>(1));
+    } else if (_wcsicmp(cls, WC_COMBOBOXW) == 0) {
+        SetWindowTheme(child, L"", L"");
+        SetWindowLongPtrW(child, GWL_STYLE, GetWindowLongPtrW(child, GWL_STYLE) & ~WS_BORDER);
+        SetWindowSubclass(child, comboProc, kComboSubclass, 0);
+        roundControl(child, 10);
+        SetPropW(child, L"ZosmaStableStyled", reinterpret_cast<HANDLE>(1));
+        InvalidateRect(child, nullptr, TRUE);
     }
 }
 
@@ -338,7 +404,7 @@ LRESULT CALLBACK aboutProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (body) SelectObject(dc, body);
         SetTextColor(dc, kMuted);
         r = {28, 60, 552, 84};
-        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.3 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"Uma solução Zosma Labs  ·  Versão 0.3.4 Beta", -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         HBRUSH panel = CreateSolidBrush(kPanel);
         HPEN pen = CreatePen(PS_SOLID, 1, kBorder);
@@ -427,6 +493,13 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, D
         const LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
         paintHeader(hwnd);
         return result;
+    }
+    if (msg == WM_CTLCOLORLISTBOX) {
+        HDC dc = reinterpret_cast<HDC>(wp);
+        SetTextColor(dc, kText);
+        SetBkColor(dc, RGB(17, 27, 40));
+        static HBRUSH listBrush = CreateSolidBrush(RGB(17, 27, 40));
+        return reinterpret_cast<LRESULT>(listBrush);
     }
     if (msg == WM_NCDESTROY) {
         KillTimer(hwnd, kOneShotStyleTimer);
