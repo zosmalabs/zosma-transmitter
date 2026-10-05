@@ -37,14 +37,19 @@ jobs:
             -OutFile $packagePath
           Expand-Archive -Path $packagePath -DestinationPath $ndiRuntimeDir -Force
 
-      - name: Montar pacote portátil
+      - name: Montar pacotes portáteis
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path dist-transmitter | Out-Null
+          New-Item -ItemType Directory -Force -Path dist-receiver | Out-Null
 
           Copy-Item `
             "build\Release\Zosma Transmitter.exe" `
-            "dist\Zosma Transmitter.exe"
+            "dist-transmitter\Zosma Transmitter.exe"
+
+          Copy-Item `
+            "build\Release\Zosma Receiver.exe" `
+            "dist-receiver\Zosma Receiver.exe"
 
           $ndiDll = Get-ChildItem `
             -Path "$env:RUNNER_TEMP\ndi-runtime" `
@@ -59,16 +64,30 @@ jobs:
 
           Copy-Item `
             $ndiDll.FullName `
-            "dist\Processing.NDI.Lib.x64.dll"
+            "dist-transmitter\Processing.NDI.Lib.x64.dll"
 
-          Copy-Item "README-TESTE.txt" "dist\LEIA-ME.txt"
-          Copy-Item "THIRD_PARTY_NOTICES.md" "dist\AVISOS-DE-TERCEIROS.txt"
+          Copy-Item `
+            $ndiDll.FullName `
+            "dist-receiver\Processing.NDI.Lib.x64.dll"
+
+          Copy-Item "README-TESTE.txt" "dist-transmitter\LEIA-ME.txt"
+          Copy-Item "README-RECEIVER-TESTE.txt" "dist-receiver\LEIA-ME.txt"
+          Copy-Item "THIRD_PARTY_NOTICES.md" "dist-transmitter\AVISOS-DE-TERCEIROS.txt"
+          Copy-Item "THIRD_PARTY_NOTICES.md" "dist-receiver\AVISOS-DE-TERCEIROS.txt"
 
       - name: Publicar artifact de teste
         uses: actions/upload-artifact@v4
         with:
           name: Zosma-Transmitter-Windows-x64
-          path: dist/*
+          path: dist-transmitter/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publicar artifact de teste do Receiver
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zosma-Receiver-Windows-x64
+          path: dist-receiver/*
           if-no-files-found: error
           retention-days: 30
 
@@ -77,8 +96,13 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path "dist\*" `
+            -Path "dist-transmitter\*" `
             -DestinationPath "Zosma-Transmitter-${{ github.ref_name }}-Windows-x64.zip" `
+            -Force
+
+          Compress-Archive `
+            -Path "dist-receiver\*" `
+            -DestinationPath "Zosma-Receiver-${{ github.ref_name }}-Windows-x64.zip" `
             -Force
 
       - name: Anexar pacote à release
@@ -88,12 +112,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $asset = "Zosma-Transmitter-$tag-Windows-x64.zip"
+          $transmitterAsset = "Zosma-Transmitter-$tag-Windows-x64.zip"
+          $receiverAsset = "Zosma-Receiver-$tag-Windows-x64.zip"
 
           for ($attempt = 1; $attempt -le 12; $attempt++) {
             gh release view $tag --repo "${{ github.repository }}" 2>$null
             if ($LASTEXITCODE -eq 0) {
-              gh release upload $tag $asset `
+              gh release upload $tag $transmitterAsset $receiverAsset `
                 --repo "${{ github.repository }}" `
                 --clobber
               exit $LASTEXITCODE
