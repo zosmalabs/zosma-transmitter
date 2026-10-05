@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <dwmapi.h>
 #include <mmsystem.h>
@@ -48,6 +49,7 @@ enum ControlId {
     IdFullscreen,
     IdMonitors,
     IdAudio,
+    IdResetCrop,
     IdPreview,
     IdStatus,
     IdDetails
@@ -248,6 +250,7 @@ struct State {
     HWND fullscreen{};
     HWND monitors{};
     HWND audio{};
+    HWND resetCrop{};
     HWND preview{};
     HWND output{};
     HWND status{};
@@ -276,6 +279,15 @@ struct State {
     std::atomic_bool audioActive{false};
     std::atomic_bool audioEnabled{true};
     std::atomic_bool frameMessagePending{false};
+
+    int cropLeft{};
+    int cropTop{};
+    int cropRight{};
+    int cropBottom{};
+    int cropSourceWidth{};
+    int cropSourceHeight{};
+    RECT previewImageRect{};
+    int cropDragEdge{};
 
 };
 
@@ -324,9 +336,10 @@ void drawRoundedButton(const DRAWITEMSTRUCT& item) {
     const bool audio = item.CtlID == IdAudio;
 
     RECT bounds = item.rcItem;
-    HBRUSH background = CreateSolidBrush(primary ? (pressed ? RGB(28, 150, 99) : kAccent)
-                                                   : (pressed ? kControlPressed : kControl));
-    HPEN border = CreatePen(PS_SOLID, 1, primary ? kAccentBright : kBorder);
+    HBRUSH background = CreateSolidBrush(audio ? kBackground :
+                                         (primary ? (pressed ? RGB(28, 150, 99) : kAccent)
+                                                  : (pressed ? kControlPressed : kControl)));
+    HPEN border = CreatePen(PS_SOLID, 1, audio ? kBackground : (primary ? kAccentBright : kBorder));
     HGDIOBJ oldBrush = SelectObject(item.hDC, background);
     HGDIOBJ oldPen = SelectObject(item.hDC, border);
     RoundRect(item.hDC, bounds.left, bounds.top, bounds.right, bounds.bottom, 14, 14);
@@ -341,26 +354,23 @@ void drawRoundedButton(const DRAWITEMSTRUCT& item) {
 
     if (audio) {
         const bool checked = SendMessageW(item.hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
-        RECT box{bounds.left + 12, bounds.top + 6, bounds.left + 32, bounds.top + 26};
-        HBRUSH checkBrush = CreateSolidBrush(checked ? kAccent : RGB(12, 19, 29));
+        RECT box{bounds.left + 2, bounds.top + 6, bounds.left + 38, bounds.top + 26};
+        HBRUSH checkBrush = CreateSolidBrush(checked ? kAccent : RGB(36, 49, 66));
         HPEN checkPen = CreatePen(PS_SOLID, 1, checked ? kAccentBright : kBorder);
         oldBrush = SelectObject(item.hDC, checkBrush);
         oldPen = SelectObject(item.hDC, checkPen);
-        RoundRect(item.hDC, box.left, box.top, box.right, box.bottom, 6, 6);
-        if (checked) {
-            HPEN tick = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-            HGDIOBJ oldTick = SelectObject(item.hDC, tick);
-            MoveToEx(item.hDC, box.left + 5, box.top + 10, nullptr);
-            LineTo(item.hDC, box.left + 9, box.top + 14);
-            LineTo(item.hDC, box.left + 16, box.top + 6);
-            SelectObject(item.hDC, oldTick);
-            DeleteObject(tick);
-        }
+        RoundRect(item.hDC, box.left, box.top, box.right, box.bottom, 20, 20);
+        HBRUSH knob = CreateSolidBrush(RGB(255, 255, 255));
+        SelectObject(item.hDC, knob);
+        SelectObject(item.hDC, GetStockObject(NULL_PEN));
+        const int knobLeft = checked ? box.right - 18 : box.left + 3;
+        Ellipse(item.hDC, knobLeft, box.top + 3, knobLeft + 14, box.top + 17);
         SelectObject(item.hDC, oldPen);
         SelectObject(item.hDC, oldBrush);
+        DeleteObject(knob);
         DeleteObject(checkPen);
         DeleteObject(checkBrush);
-        RECT label{bounds.left + 40, bounds.top, bounds.right - 8, bounds.bottom};
+        RECT label{bounds.left + 48, bounds.top, bounds.right - 4, bounds.bottom};
         DrawTextW(item.hDC, L"Reproduzir áudio", -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     } else {
         wchar_t label[128]{};
@@ -701,12 +711,14 @@ void layoutControls(int width, int height) {
 
     const int secondRow = headerHeight + 46;
     MoveWindow(g.monitors, margin, secondRow, std::min(360, contentWidth - 210), 240, TRUE);
-    MoveWindow(g.audio, margin + std::min(360, contentWidth - 210) + 16,
-               secondRow + 7, 180, 24, TRUE);
+    const int monitorWidth = std::min(360, contentWidth - 210);
+    MoveWindow(g.audio, margin + monitorWidth + 16, secondRow + 3, 180, 32, TRUE);
+    MoveWindow(g.resetCrop, margin + monitorWidth + 206, secondRow, 130, 38, TRUE);
 
     roundControl(g.sources, sourceWidth, 38);
-    roundControl(g.monitors, std::min(360, contentWidth - 210), 38);
+    roundControl(g.monitors, monitorWidth, 38);
     roundControl(g.audio, 180, 32);
+    roundControl(g.resetCrop, 130, 38);
     roundControl(g.refresh, 96, 38);
     roundControl(g.connect, 110, 38);
     roundControl(g.fullscreen, 100, 38);
@@ -716,6 +728,83 @@ void layoutControls(int width, int height) {
     MoveWindow(g.preview, margin, previewTop, contentWidth, previewHeight, TRUE);
     MoveWindow(g.status, margin, height - statusHeight, contentWidth / 2, 24, TRUE);
     MoveWindow(g.details, margin + contentWidth / 2, height - statusHeight, contentWidth / 2, 24, TRUE);
+}
+
+void ensureCropBounds(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    if (g.cropSourceWidth != width || g.cropSourceHeight != height ||
+        g.cropRight <= g.cropLeft || g.cropBottom <= g.cropTop) {
+        g.cropLeft = 0;
+        g.cropTop = 0;
+        g.cropRight = width;
+        g.cropBottom = height;
+        g.cropSourceWidth = width;
+        g.cropSourceHeight = height;
+    }
+}
+
+RECT cropScreenRect() {
+    const RECT image = g.previewImageRect;
+    const int width = std::max(1, image.right - image.left);
+    const int height = std::max(1, image.bottom - image.top);
+    RECT result{};
+    result.left = image.left + MulDiv(g.cropLeft, width, std::max(1, g.cropSourceWidth));
+    result.top = image.top + MulDiv(g.cropTop, height, std::max(1, g.cropSourceHeight));
+    result.right = image.left + MulDiv(g.cropRight, width, std::max(1, g.cropSourceWidth));
+    result.bottom = image.top + MulDiv(g.cropBottom, height, std::max(1, g.cropSourceHeight));
+    return result;
+}
+
+void drawCropOverlay(HDC dc) {
+    const RECT crop = cropScreenRect();
+    HPEN pen = CreatePen(PS_SOLID, 2, kAccentBright);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(dc, crop.left, crop.top, crop.right, crop.bottom);
+
+    HBRUSH handle = CreateSolidBrush(kAccentBright);
+    SelectObject(dc, handle);
+    SelectObject(dc, GetStockObject(NULL_PEN));
+    const int centerX = (crop.left + crop.right) / 2;
+    const int centerY = (crop.top + crop.bottom) / 2;
+    Rectangle(dc, crop.left - 4, centerY - 12, crop.left + 5, centerY + 12);
+    Rectangle(dc, crop.right - 5, centerY - 12, crop.right + 4, centerY + 12);
+    Rectangle(dc, centerX - 12, crop.top - 4, centerX + 12, crop.top + 5);
+    Rectangle(dc, centerX - 12, crop.bottom - 5, centerX + 12, crop.bottom + 4);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(handle);
+    DeleteObject(pen);
+}
+
+int hitCropEdge(int x, int y) {
+    const RECT crop = cropScreenRect();
+    constexpr int tolerance = 14;
+    if (y >= crop.top - tolerance && y <= crop.bottom + tolerance) {
+        if (std::abs(x - crop.left) <= tolerance) return 1;
+        if (std::abs(x - crop.right) <= tolerance) return 2;
+    }
+    if (x >= crop.left - tolerance && x <= crop.right + tolerance) {
+        if (std::abs(y - crop.top) <= tolerance) return 3;
+        if (std::abs(y - crop.bottom) <= tolerance) return 4;
+    }
+    return 0;
+}
+
+void dragCropEdge(int x, int y) {
+    const RECT image = g.previewImageRect;
+    const int displayWidth = std::max(1, image.right - image.left);
+    const int displayHeight = std::max(1, image.bottom - image.top);
+    const int sourceX = std::clamp(MulDiv(x - image.left, g.cropSourceWidth, displayWidth), 0, g.cropSourceWidth);
+    const int sourceY = std::clamp(MulDiv(y - image.top, g.cropSourceHeight, displayHeight), 0, g.cropSourceHeight);
+    const int minWidth = std::max(32, g.cropSourceWidth / 20);
+    const int minHeight = std::max(32, g.cropSourceHeight / 20);
+    if (g.cropDragEdge == 1) g.cropLeft = std::min(sourceX, g.cropRight - minWidth);
+    if (g.cropDragEdge == 2) g.cropRight = std::max(sourceX, g.cropLeft + minWidth);
+    if (g.cropDragEdge == 3) g.cropTop = std::min(sourceY, g.cropBottom - minHeight);
+    if (g.cropDragEdge == 4) g.cropBottom = std::max(sourceY, g.cropTop + minHeight);
+    InvalidateRect(g.preview, nullptr, FALSE);
+    if (g.output) InvalidateRect(g.output, nullptr, FALSE);
 }
 
 void paintPreview(HWND window) {
@@ -750,12 +839,18 @@ void paintPreview(HWND window) {
     }
 
     if (frame && !frame->pixels.empty() && sourceWidth > 0 && sourceHeight > 0) {
+        ensureCropBounds(sourceWidth, sourceHeight);
+        const bool outputWindow = window == g.output;
+        const int cropLeft = outputWindow ? g.cropLeft : 0;
+        const int cropTop = outputWindow ? g.cropTop : 0;
+        const int cropWidth = outputWindow ? g.cropRight - g.cropLeft : sourceWidth;
+        const int cropHeight = outputWindow ? g.cropBottom - g.cropTop : sourceHeight;
         const int targetWidth = client.right - client.left;
         const int targetHeight = client.bottom - client.top;
-        const double scale = std::min(static_cast<double>(targetWidth) / sourceWidth,
-                                      static_cast<double>(targetHeight) / sourceHeight);
-        const int drawWidth = std::max(1, static_cast<int>(sourceWidth * scale));
-        const int drawHeight = std::max(1, static_cast<int>(sourceHeight * scale));
+        const double scale = std::min(static_cast<double>(targetWidth) / cropWidth,
+                                      static_cast<double>(targetHeight) / cropHeight);
+        const int drawWidth = std::max(1, static_cast<int>(cropWidth * scale));
+        const int drawHeight = std::max(1, static_cast<int>(cropHeight * scale));
         const int x = (targetWidth - drawWidth) / 2;
         const int y = (targetHeight - drawHeight) / 2;
 
@@ -767,8 +862,13 @@ void paintPreview(HWND window) {
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
         SetStretchBltMode(backBuffer, COLORONCOLOR);
-        StretchDIBits(backBuffer, x, y, drawWidth, drawHeight, 0, 0, sourceWidth, sourceHeight,
+        StretchDIBits(backBuffer, x, y, drawWidth, drawHeight,
+                      cropLeft, cropTop, cropWidth, cropHeight,
                       frame->pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
+        if (!outputWindow) {
+            g.previewImageRect = RECT{x, y, x + drawWidth, y + drawHeight};
+            drawCropOverlay(backBuffer);
+        }
     } else {
         SetBkMode(backBuffer, TRANSPARENT);
         SetTextColor(backBuffer, kMuted);
@@ -787,6 +887,36 @@ LRESULT CALLBACK previewProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
     if (message == WM_PAINT) {
         paintPreview(window);
         return 0;
+    }
+    if (message == WM_LBUTTONDOWN) {
+        g.cropDragEdge = hitCropEdge(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        if (g.cropDragEdge) {
+            SetCapture(window);
+            return 0;
+        }
+    }
+    if (message == WM_MOUSEMOVE && g.cropDragEdge && GetCapture() == window) {
+        dragCropEdge(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+    }
+    if (message == WM_LBUTTONUP && GetCapture() == window) {
+        ReleaseCapture();
+        g.cropDragEdge = 0;
+        return 0;
+    }
+    if (message == WM_SETCURSOR) {
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        ScreenToClient(window, &cursor);
+        const int edge = hitCropEdge(cursor.x, cursor.y);
+        if (edge == 1 || edge == 2) {
+            SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+            return TRUE;
+        }
+        if (edge == 3 || edge == 4) {
+            SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
+            return TRUE;
+        }
     }
     if (message == WM_ERASEBKGND) return 1;
     return DefWindowProcW(window, message, wParam, lParam);
@@ -832,6 +962,8 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                      0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdMonitors), nullptr, nullptr);
         g.audio = CreateWindowExW(0, WC_BUTTONW, L"Reproduzir áudio", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                   0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdAudio), nullptr, nullptr);
+        g.resetCrop = CreateWindowExW(0, WC_BUTTONW, L"Remover corte", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                                      0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdResetCrop), nullptr, nullptr);
         g.preview = CreateWindowExW(0, kPreviewClass, nullptr, WS_CHILD | WS_VISIBLE,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdPreview), nullptr, nullptr);
         g.status = CreateWindowExW(0, WC_STATICW, L"Inicializando…", WS_CHILD | WS_VISIBLE,
@@ -839,7 +971,8 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g.details = CreateWindowExW(0, WC_STATICW, L"Teste inicial de recepção de vídeo", WS_CHILD | WS_VISIBLE | SS_RIGHT,
                                     0, 0, 0, 0, window, reinterpret_cast<HMENU>(IdDetails), nullptr, nullptr);
 
-        for (HWND control : {g.sources, g.monitors, g.audio, g.refresh, g.connect, g.fullscreen, g.status, g.details}) {
+        for (HWND control : {g.sources, g.monitors, g.audio, g.resetCrop, g.refresh, g.connect,
+                             g.fullscreen, g.status, g.details}) {
             setFont(control, gFont);
             SetWindowTheme(control, L"DarkMode_Explorer", nullptr);
         }
@@ -874,6 +1007,16 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             g.audioEnabled = !g.audioEnabled.load();
             SendMessageW(g.audio, BM_SETCHECK, g.audioEnabled.load() ? BST_CHECKED : BST_UNCHECKED, 0);
             InvalidateRect(g.audio, nullptr, TRUE);
+            return 0;
+        case IdResetCrop:
+            if (g.cropSourceWidth > 0 && g.cropSourceHeight > 0) {
+                g.cropLeft = 0;
+                g.cropTop = 0;
+                g.cropRight = g.cropSourceWidth;
+                g.cropBottom = g.cropSourceHeight;
+                InvalidateRect(g.preview, nullptr, FALSE);
+                if (g.output) InvalidateRect(g.output, nullptr, FALSE);
+            }
             return 0;
         }
         break;
