@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -32,7 +31,6 @@ using NdiLoadFunction = const NDIlib_v6* (*)();
 using namespace std::chrono_literals;
 
 std::string gTrustedIp;
-std::atomic<float> gAudioOutputLevel{0.0f};
 
 class AudioWorker {
 public:
@@ -121,10 +119,6 @@ private:
                 }
             }
         }
-
-        float peak = 0.0f;
-        for (const float sample : planar_) peak = (std::max)(peak, std::abs(sample));
-        gAudioOutputLevel = (std::min)(peak, 1.0f);
 
         NDIlib_audio_frame_v3_t audio{};
         audio.sample_rate = static_cast<int>(format->nSamplesPerSec);
@@ -245,7 +239,6 @@ private:
 };
 
 AudioWorker gAudioWorker;
-AudioWorker gAudioMeterWorker;
 
 std::filesystem::path executableDirectory() {
     std::vector<wchar_t> buffer(32768);
@@ -453,20 +446,3 @@ int NdiSender::connections() const {
 }
 
 bool NdiSender::valid() const { return api_ && sender_; }
-
-float ndiAudioOutputLevel() { return gAudioOutputLevel.load(); }
-
-void startAudioLevelMonitoring() {
-    if (!gAudioMeterWorker.running())
-        gAudioMeterWorker.start(nullptr, nullptr, configuredAudioDeviceId());
-}
-
-void stopAudioLevelMonitoring() {
-    gAudioMeterWorker.stop();
-    gAudioOutputLevel = 0.0f;
-}
-
-void restartAudioLevelMonitoring() {
-    stopAudioLevelMonitoring();
-    startAudioLevelMonitoring();
-}
