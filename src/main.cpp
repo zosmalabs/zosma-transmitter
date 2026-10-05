@@ -753,7 +753,7 @@ void drawAudioMeter(HDC dc) {
 
 void createUi() {
     g.help = addControl(L"BUTTON", L"?  Como usar", BS_PUSHBUTTON, 806, 20, 116, 38, IdHelp, gFont);
-    g.start = addControl(L"BUTTON", L"Iniciar transmissão", BS_DEFPUSHBUTTON, 486, 18, 180, 42, IdStart, gFontBold);
+    g.start = addControl(L"BUTTON", L"Iniciar transmissão", BS_DEFPUSHBUTTON, 476, 18, 190, 42, IdStart, gFontBold);
     g.sourceName = addControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 32, 208, 466, 34, IdSourceName, gFont);
     g.captureKind = addControl(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_VSCROLL, 32, 274, 140, 220, IdCaptureKind, gFont);
     SendMessageW(g.captureKind, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Monitor"));
