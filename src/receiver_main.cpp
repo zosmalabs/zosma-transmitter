@@ -369,7 +369,7 @@ void paintPreview(HWND window) {
                       frame.data(), &info, DIB_RGB_COLORS, SRCCOPY);
     } else {
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, gMuted);
+        SetTextColor(dc, kMuted);
         SelectObject(dc, gFontBold);
         DrawTextW(dc, g.connected.load() ? L"Aguardando o primeiro quadro…" : L"Selecione uma fonte NDI para iniciar",
                   -1, &client, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
