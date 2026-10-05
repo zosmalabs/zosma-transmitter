@@ -3,10 +3,11 @@
 #include "tray_controller.h"
 
 #include <windows.h>
-#include <functiondiscoverykeys_devpkey.h>
 #include <commctrl.h>
 #include <mmdeviceapi.h>
+#include <propkeydef.h>
 #include <propsys.h>
+#include <functiondiscoverykeys_devpkey.h>
 #include <propvarutil.h>
 #include <uxtheme.h>
 #include <ws2tcpip.h>
