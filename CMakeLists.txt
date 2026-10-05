@@ -20,6 +20,11 @@ add_executable(zosma-transmitter WIN32
   src/resources.rc
 )
 
+add_executable(zosma-receiver WIN32
+  src/receiver_main.cpp
+  src/resources.rc
+)
+
 # Renomeia somente a implementação original de sendFrame() para sendFrameRaw().
 # O wrapper em ndi_sender_tray.cpp decide se envia o quadro real ou a tela manual de privacidade.
 set_source_files_properties(src/ndi_sender.cpp PROPERTIES
@@ -27,6 +32,7 @@ set_source_files_properties(src/ndi_sender.cpp PROPERTIES
 )
 
 target_compile_features(zosma-transmitter PRIVATE cxx_std_20)
+target_compile_features(zosma-receiver PRIVATE cxx_std_20)
 target_compile_definitions(zosma-transmitter PRIVATE
   UNICODE
   _UNICODE
@@ -38,7 +44,23 @@ target_compile_definitions(zosma-transmitter PRIVATE
   NDILIB_CPP_DEFAULT_CONSTRUCTORS=0
 )
 
+target_compile_definitions(zosma-receiver PRIVATE
+  UNICODE
+  _UNICODE
+  WINVER=0x0A00
+  _WIN32_WINNT=0x0A00
+  NOMINMAX
+  WIN32_LEAN_AND_MEAN
+  PROCESSINGNDILIB_STATIC
+  NDILIB_CPP_DEFAULT_CONSTRUCTORS=0
+)
+
 target_include_directories(zosma-transmitter PRIVATE
+  src
+  third_party/ndi/include
+)
+
+target_include_directories(zosma-receiver PRIVATE
   src
   third_party/ndi/include
 )
@@ -59,6 +81,14 @@ target_link_libraries(zosma-transmitter PRIVATE
   avrt
 )
 
+target_link_libraries(zosma-receiver PRIVATE
+  user32
+  gdi32
+  comctl32
+  dwmapi
+  uxtheme
+)
+
 if(MSVC)
   target_compile_options(zosma-transmitter PRIVATE
     /W4
@@ -67,9 +97,20 @@ if(MSVC)
     /EHsc
     /FIui_compat.h
   )
+  target_compile_options(zosma-receiver PRIVATE
+    /W4
+    /permissive-
+    /utf-8
+    /EHsc
+  )
   target_link_options(zosma-transmitter PRIVATE /SUBSYSTEM:WINDOWS /MANIFEST:NO)
+  target_link_options(zosma-receiver PRIVATE /SUBSYSTEM:WINDOWS /MANIFEST:NO)
 endif()
 
 set_target_properties(zosma-transmitter PROPERTIES
   OUTPUT_NAME "Zosma Transmitter"
+)
+
+set_target_properties(zosma-receiver PROPERTIES
+  OUTPUT_NAME "Zosma Receiver"
 )
