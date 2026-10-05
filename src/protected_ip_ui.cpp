@@ -132,7 +132,6 @@ void selectAudioEndpoint() {
         gConfiguredAudioDeviceId = id;
     }
     saveAudioDeviceId(id);
-    restartAudioLevelMonitoring();
 }
 
 std::string utf8(const std::wstring& text) {
@@ -310,7 +309,6 @@ void installUi(HWND hwnd) {
     SetWindowTheme(gAudioOption, L"DarkMode_Explorer", nullptr);
     SendMessageW(gAudioOption, BM_SETCHECK, BST_CHECKED, 0);
     refreshAudioEndpoints();
-    restartAudioLevelMonitoring();
     gAudioRequested = true;
     SetWindowSubclass(hwnd, subclassProc, 1, 0);
     refreshControls();
